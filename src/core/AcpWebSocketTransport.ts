@@ -1,5 +1,4 @@
 import { EventEmitter } from 'events';
-import { WebSocket } from 'ws';
 import { JsonRpcMessage, JsonRpcId, JsonRpcMessageSchema } from '../common/types.js';
 
 export interface AcpWebSocketOptions {
@@ -9,7 +8,7 @@ export interface AcpWebSocketOptions {
 }
 
 export class AcpWebSocketTransport extends EventEmitter {
-    private ws: WebSocket | null = null;
+    private ws: any | null = null;
     private options: AcpWebSocketOptions;
     private pendingRequests = new Map<JsonRpcId, { resolve: (res: any) => void; reject: (err: any) => void }>();
     private nextId = 1;
@@ -24,43 +23,93 @@ export class AcpWebSocketTransport extends EventEmitter {
         };
     }
 
+    private getWebSocketConstructor(): any {
+        // In browser, window.WebSocket is most likely to be the "real" native one.
+        // Bundlers like Turbopack often shim globalThis.WebSocket to 'ws' shim.
+        if (typeof window !== 'undefined' && typeof window.WebSocket === 'function') {
+            return window.WebSocket;
+        }
+
+        const global: any = globalThis;
+        const win: any = typeof window !== 'undefined' ? window : {};
+
+        // Follow-up checks
+        if (typeof global.WebSocket === 'function') return global.WebSocket;
+        if (global.WebSocket?.WebSocket) return global.WebSocket.WebSocket;
+        if (win.WebSocket?.WebSocket) return win.WebSocket.WebSocket;
+        if (typeof win.MozWebSocket === 'function') return win.MozWebSocket;
+
+        return null;
+    }
+
     connect(): void {
         this.setConnectionState('connecting');
         console.log(`[ACP] Connecting to ${this.options.url}...`);
-        this.ws = new WebSocket(this.options.url);
 
-        this.ws.on('open', () => {
-            console.log('[ACP] WebSocket Connected');
-            this.setConnectionState('connected');
-            this.emit('connected');
-        });
-
-        this.ws.on('message', (data) => {
-            this.handleMessage(data.toString());
-        });
-
-        this.ws.on('close', () => {
-            console.log('[ACP] WebSocket Closed');
-            if (this.pendingRequests.size) {
-                const err = new Error('WebSocket closed');
-                for (const [, pending] of this.pendingRequests) {
-                    pending.reject(err);
-                }
-                this.pendingRequests.clear();
-            }
-            this.emit('disconnected');
-            if (this.options.reconnect) {
-                this.setConnectionState('reconnecting');
-                setTimeout(() => this.connect(), this.options.reconnectInterval);
-            } else {
-                this.setConnectionState('disconnected');
-            }
-        });
-
-        this.ws.on('error', (err) => {
-            console.error('[ACP] WebSocket Error:', err);
+        const WS = this.getWebSocketConstructor();
+        if (!WS) {
+            const err = new Error('WebSocket constructor not found in this environment');
+            console.error('[ACP]', err);
             this.emit('error', err);
-        });
+            return;
+        }
+
+        try {
+            this.ws = new WS(this.options.url);
+
+            this.ws.onopen = () => {
+                console.log(`[ACP] WebSocket Connected to ${this.options.url}`);
+                this.setConnectionState('connected');
+                this.emit('connected');
+            };
+
+            this.ws.onmessage = async (event: any) => {
+                try {
+                    // Normalize data to string
+                    let data = event.data;
+                    if (typeof Blob !== 'undefined' && data instanceof Blob) {
+                        data = await data.text();
+                    } else if (typeof ArrayBuffer !== 'undefined' && (data instanceof ArrayBuffer || ArrayBuffer.isView(data))) {
+                        data = new TextDecoder().decode(data);
+                    }
+                    this.handleMessage(data.toString());
+                } catch (e) {
+                    console.error('[ACP] Error processing message:', e);
+                }
+            };
+
+            this.ws.onclose = (event: any) => {
+                const reason = event.reason || 'no reason provided';
+                const code = event.code;
+                console.log(`[ACP] WebSocket Closed (URL: ${this.options.url}, Code: ${code}, Reason: ${reason})`);
+
+                if (this.pendingRequests.size) {
+                    const err = new Error(`WebSocket closed: ${reason} (code: ${code})`);
+                    for (const [, pending] of this.pendingRequests) {
+                        pending.reject(err);
+                    }
+                    this.pendingRequests.clear();
+                }
+                this.emit('disconnected');
+
+                if (this.options.reconnect) {
+                    this.setConnectionState('reconnecting');
+                    setTimeout(() => this.connect(), this.options.reconnectInterval);
+                } else {
+                    this.setConnectionState('disconnected');
+                }
+            };
+
+            this.ws.onerror = (err: any) => {
+                // Browsers often fire a generic error event with no details.
+                const msg = `WebSocket connection failed to ${this.options.url}. Check if the server is running and accessible.`;
+                console.error(`[ACP] ${msg}`);
+                this.emit('error', new Error(msg));
+            };
+        } catch (e: any) {
+            console.error(`[ACP] Failed to initialize WebSocket for ${this.options.url}:`, e);
+            this.emit('error', e);
+        }
     }
 
     sendRequest(method: string, params: any): Promise<any> {
@@ -74,7 +123,7 @@ export class AcpWebSocketTransport extends EventEmitter {
 
         return new Promise((resolve, reject) => {
             const ws = this.ws;
-            if (!ws || ws.readyState !== WebSocket.OPEN) {
+            if (!ws || ws.readyState !== 1) { // 1 = OPEN
                 reject(new Error('WebSocket is not open'));
                 return;
             }
@@ -89,7 +138,9 @@ export class AcpWebSocketTransport extends EventEmitter {
             method,
             params,
         };
-        this.ws?.send(JSON.stringify(message));
+        if (this.ws?.readyState === 1) {
+            this.ws.send(JSON.stringify(message));
+        }
     }
 
     sendResponse(id: JsonRpcId, result: any): void {
@@ -98,7 +149,9 @@ export class AcpWebSocketTransport extends EventEmitter {
             id,
             result,
         };
-        this.ws?.send(JSON.stringify(message));
+        if (this.ws?.readyState === 1) {
+            this.ws.send(JSON.stringify(message));
+        }
     }
 
     private handleMessage(data: string): void {
@@ -112,7 +165,11 @@ export class AcpWebSocketTransport extends EventEmitter {
                 if (pending) {
                     this.pendingRequests.delete(msg.id);
                     if (msg.error) {
-                        pending.reject(msg.error);
+                        const errorMsg = msg.error.message || 'Unknown JSON-RPC error';
+                        const error = new Error(errorMsg);
+                        (error as any).code = msg.error.code;
+                        (error as any).data = msg.error.data;
+                        pending.reject(error);
                     } else {
                         pending.resolve(msg.result);
                     }
@@ -132,7 +189,10 @@ export class AcpWebSocketTransport extends EventEmitter {
 
     dispose(): void {
         this.options.reconnect = false;
-        this.ws?.close();
+        if (this.ws) {
+            this.ws.onclose = null; // Prevent reconnect loop
+            this.ws.close();
+        }
         this.pendingRequests.clear();
         this.setConnectionState('disconnected');
     }

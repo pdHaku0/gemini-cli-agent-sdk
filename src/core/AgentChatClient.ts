@@ -36,7 +36,8 @@ export class AgentChatClient extends EventEmitter {
 
     constructor(options: AgentChatClientOptions) {
         super();
-        this.options = { cwd: process.cwd(), ...options };
+        const baseCwd = typeof process !== 'undefined' && process.cwd ? process.cwd() : undefined;
+        this.options = { cwd: baseCwd, ...options };
         this.transport = new AcpWebSocketTransport({ url: options.url, reconnect: true });
         this.setupHandlers();
     }
@@ -355,6 +356,10 @@ export class AgentChatClient extends EventEmitter {
         // Pure SDK: just notify app. App handles policy.
         this.emit('approval_required', this.pendingApproval);
         this.emit('permission_required', this.pendingApproval);
+    }
+
+    disconnect() {
+        this.dispose();
     }
 
     dispose() {
