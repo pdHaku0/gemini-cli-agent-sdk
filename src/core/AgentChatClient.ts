@@ -36,6 +36,7 @@ export class AgentChatClient extends EventEmitter {
 
     constructor(options: AgentChatClientOptions) {
         super();
+        console.log('[SDK] AgentChatClient initialized (v0.1.3)');
         const baseCwd = typeof process !== 'undefined' && process.cwd ? process.cwd() : undefined;
         this.options = { cwd: baseCwd, ...options };
         this.transport = new AcpWebSocketTransport({ url: options.url, reconnect: true });
