@@ -1,6 +1,6 @@
 {
   "name": "@yohaku/gemini-cli-agent-sdk",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "type": "module",
   "description": "A high-level SDK for building AI Agent chat interfaces using Gemini ACP",
   "main": "dist/index.js",

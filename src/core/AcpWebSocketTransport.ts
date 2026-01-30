@@ -72,7 +72,13 @@ export class AcpWebSocketTransport extends EventEmitter {
                     } else if (typeof ArrayBuffer !== 'undefined' && (data instanceof ArrayBuffer || ArrayBuffer.isView(data))) {
                         data = new TextDecoder().decode(data);
                     }
-                    this.handleMessage(data.toString());
+
+                    const strData = data.toString();
+                    if (strData.includes('"error"')) {
+                        console.log('[ACP] Received Error Message:', strData);
+                    }
+
+                    this.handleMessage(strData);
                 } catch (e) {
                     console.error('[ACP] Error processing message:', e);
                 }
