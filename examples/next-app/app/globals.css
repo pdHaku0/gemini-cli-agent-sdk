@@ -1,0 +1,27 @@
+:root {
+  --bg: #f7f3ea;
+  --ink: #1f1d1a;
+  --card: #fffaf2;
+  --accent: #c45a1b;
+  --muted: #6e6258;
+  --border: #e2d7c8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Serif", "Georgia", "Times New Roman", serif;
+  color: var(--ink);
+  background: radial-gradient(1200px 600px at 10% 0%, #fff4dc 0%, #f7f3ea 60%);
+}
+
+a {
+  color: var(--accent);
+}
+
+button {
+  cursor: pointer;
+}

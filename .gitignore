@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.next/
+out/
+.turbo/
+.vercel/
+
+# Logs
+*.log
+
+# Test output
+/test_output.txt
+
+# Coverage
+coverage/
+
+# Env files
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Misc
+*.tsbuildinfo
+
+# Examples (generated)
+examples/**/node_modules/
+examples/**/.next/
+examples/**/out/
+examples/**/.turbo/
+examples/**/.vercel/
+examples/**/coverage/
+examples/**/.cache/
+examples/**/.env
+examples/**/.env.*
+examples/next-app/playground/*
+!examples/next-app/playground/.gitkeep
