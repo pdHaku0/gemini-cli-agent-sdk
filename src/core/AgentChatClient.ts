@@ -479,6 +479,7 @@ export class AgentChatClient extends EventEmitter {
             ts: Date.now(),
         };
         last.toolCalls.push(toolCall);
+        last.content.push({ type: 'tool_call', call: toolCall }); // Fix: Add to ordered content
         this.emit('tool_update', { messageId: last.id, toolCall });
         this.emit('tool_call_started', { messageId: last.id, toolCall });
         this.emit('message_update', last);

@@ -16,7 +16,10 @@ export interface GeminiBridgeOptions {
     projectRoot?: string;
 }
 
-export class GeminiBridge {
+import { EventEmitter } from 'events';
+import * as url from 'url';
+
+export class GeminiBridge extends EventEmitter {
     private options: Required<GeminiBridgeOptions>;
     private wss: WebSocketServer | null = null;
     private geminiProcess: ChildProcess | null = null;
@@ -27,7 +30,12 @@ export class GeminiBridge {
     private logFile: string;
     private projectRootReal: string;
 
+    // History Persistence
+    private history: { timestamp: number; data: any }[] = [];
+    private readonly MAX_HISTORY_SIZE = 2000;
+
     constructor(options: GeminiBridgeOptions = {}) {
+        super();
         const cwd = options.projectRoot || process.cwd();
         this.projectRootReal = this.resolveRealPath(cwd);
 
@@ -61,21 +69,22 @@ export class GeminiBridge {
             this.log(`[Gemini Bridge] WebSocket server error: ${err}`);
         });
 
-        this.wss.on('connection', (ws: WebSocket) => {
-            this.handleConnection(ws);
+        this.wss.on('connection', (ws: WebSocket, req: any) => {
+            this.handleConnection(ws, req);
         });
 
         this.startGemini();
     }
 
     public stop() {
+        if (this.wss) {
+            const server = this.wss;
+            this.wss = null; // Clear reference first to prevent restart
+            server.close();
+        }
         if (this.geminiProcess) {
             this.geminiProcess.kill();
             this.geminiProcess = null;
-        }
-        if (this.wss) {
-            this.wss.close();
-            this.wss = null;
         }
     }
 
@@ -273,6 +282,7 @@ export class GeminiBridge {
                 }
 
                 this.broadcast(msg);
+                this.emit('gemini:message', msg); // Hook
 
                 if (msg.result && msg.result.sessionId) {
                     this.acpSessionId = msg.result.sessionId;
@@ -286,9 +296,42 @@ export class GeminiBridge {
         }
     }
 
-    private handleConnection(ws: WebSocket) {
+    private handleConnection(ws: WebSocket, req: any) {
         const addr = (ws as any)._socket?.remoteAddress || 'unknown';
         this.log(`[Gemini Bridge] Client connected (${addr})`);
+
+        // Handle Replay logic
+        try {
+            const query = url.parse(req.url || '', true).query;
+            const limit = query.limit ? parseInt(Array.isArray(query.limit) ? query.limit[0] : query.limit, 10) : undefined;
+            const since = query.since ? parseInt(Array.isArray(query.since) ? query.since[0] : query.since, 10) : undefined;
+            const before = query.before ? parseInt(Array.isArray(query.before) ? query.before[0] : query.before, 10) : undefined;
+
+            let replay = this.history;
+
+            if (since) {
+                replay = replay.filter(h => h.timestamp > since);
+            }
+            if (before) {
+                replay = replay.filter(h => h.timestamp < before);
+            }
+
+            // Apply limit (take last N by default)
+            if (limit && limit > 0) {
+                replay = replay.slice(-limit);
+            }
+
+            if (replay.length > 0) {
+                this.log(`[Gemini Bridge] Replaying ${replay.length} messages to client`);
+                replay.forEach(h => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify(h.data));
+                    }
+                });
+            }
+        } catch (e) {
+            this.log(`[Gemini Bridge] Replay handling error: ${e}`);
+        }
 
         if (this.isAuthPending && this.pendingAuthUrl) {
             ws.send(JSON.stringify({
@@ -307,6 +350,7 @@ export class GeminiBridge {
             const str = message.toString();
             try {
                 const parsed = JSON.parse(str);
+                this.emit('client:message', parsed); // Hook
 
                 if (parsed?.method === 'gemini/submitAuthCode') {
                     const code = parsed?.params?.code;
@@ -342,6 +386,13 @@ export class GeminiBridge {
     }
 
     private broadcast(data: any) {
+        // Record History
+        const timestamp = Date.now();
+        this.history.push({ timestamp, data });
+        if (this.history.length > this.MAX_HISTORY_SIZE) {
+            this.history.shift(); // remove oldest
+        }
+
         if (!this.wss) return;
         const str = JSON.stringify(data);
         this.wss.clients.forEach((client: WebSocket) => {
@@ -449,3 +500,4 @@ export class GeminiBridge {
         this.sendToGemini({ jsonrpc: '2.0', id, error: { code, message, data } });
     }
 }
+

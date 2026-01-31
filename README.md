@@ -8,10 +8,12 @@ A TypeScript client library for building chat applications powered by Google's G
 - **Agent Chat & Logic**: Encapsulates the ACP (Agent Chat Protocol) for seamless agent interaction.
 - **Tool Support**: Built-in parsing for tool calls, including "Permission" and "User Interaction" extensions.
 - **Real-time Streaming**: Event-based architecture for streaming thoughts, text, and tool status updates.
+- **Backend Hooks**: `GeminiBridge` is an `EventEmitter` so Node.js can inspect and react to messages.
 - **UI State Store**: Optional store with subscribe/getState for GUI state binding.
 - **UI Events**: Standardized, UI-friendly events for rendering.
 - **Resilient Parsing**: Custom logic to handle Gemini CLI's specific output formats (e.g., recovering tool descriptions from titles).
 - **Diff Formatting**: Tool `diff` updates are converted into unified diff strings for efficient UI display.
+- **History Replay**: Late-joining clients can replay recent bridge messages (in-memory, capped).
 
 ## Installation
 
@@ -55,7 +57,47 @@ await client.connect();
 await client.sendMessage('Hello, can you list the files in the current directory?');
 ```
 
-### 3. UI State Store (Optional)
+### 3. Backend Hooks (Node.js)
+
+If you want to process messages in the backend process (not just forward them),
+use the bridge class directly and subscribe to events.
+
+```typescript
+import { GeminiBridge } from '@yohaku/agent-chat-sdk/server';
+
+const bridge = new GeminiBridge({ port: 4444 });
+
+bridge.on('gemini:message', (msg) => {
+    // Message coming from Gemini CLI
+    if (msg?.method === 'notify') {
+        console.log('notify:', msg.params);
+    }
+});
+
+bridge.on('client:message', (msg) => {
+    // Message coming from a WebSocket client
+    // e.g. session/prompt payloads
+});
+
+bridge.start();
+```
+
+### 4. History Replay (Late Joiners)
+
+The bridge keeps an in-memory ring buffer (max 2000 messages). Clients can ask
+for a replay on connect by adding query params to the WebSocket URL:
+
+- `limit`: last N messages
+- `since`: only messages after this UNIX timestamp (ms)
+- `before`: only messages before this UNIX timestamp (ms)
+
+Example:
+
+```text
+ws://localhost:4444?limit=50
+```
+
+### 5. UI State Store (Optional)
 
 ```typescript
 import { AgentChatClient, AgentChatStore } from '@yohaku/agent-chat-sdk';
@@ -72,7 +114,7 @@ await client.connect();
 await client.sendMessage('Hello!');
 ```
 
-### 5. Message Ordering & Rendering
+### 6. Message Ordering & Rendering
 
 To correctly render messages where tool calls, text, and thoughts are interleaved (e.g., "Thinking..." -> "Finding file..." -> `ls` -> "Found it."), use the `content` array on `AssistantMessage`.
 
@@ -93,7 +135,7 @@ msg.content.forEach(part => {
 
 `msg.text` is also available but contains a concatenated string of all text parts, losing the relative order with tool calls.
 
-### 4. UI Events (Standardized)
+### 7. UI Events (Standardized)
 
 These events are added for GUI-friendly integrations (existing events are still emitted):
 

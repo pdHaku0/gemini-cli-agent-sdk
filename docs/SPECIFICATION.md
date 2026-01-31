@@ -28,6 +28,7 @@ The system follows a 3-tier architecture to enable browser/client access to the 
 - **Protocol Translation**: Forwards JSON-RPC messages between WebSocket and Stdio.
 - **Log Management**: Handles `gemini-acp.log` rotation (max 2MB).
 - **History Sync**: (Optional) Syncs chat history to a host API if configured.
+- **Backend Hooks**: Emits events in-process for backend subscribers.
 
 ## ACP Protocol & Extensions
 
@@ -46,6 +47,16 @@ The communication relies on the Agent Chat Protocol (ACP).
     - `agent_message_chunk`: User-facing text response.
     - `tool_call`: Request to execute a tool.
 
+## Backend Event Hooks
+
+`GeminiBridge` extends `EventEmitter` and emits the following events:
+
+- `gemini:message`: Emitted when a JSON-RPC message arrives from the Gemini CLI.
+- `client:message`: Emitted when a JSON-RPC message arrives from a WebSocket client.
+
+These hooks allow server-side processing (logging, analytics, custom routing) without
+modifying the WebSocket flow.
+
 ### Custom Logic: Tool Description Parsing
 
 The Gemini CLI (v0.21.2) does not consistently emit a `description` field in the `tool_call` object. The SDK implements the following logic to recover it:
@@ -63,6 +74,14 @@ The Gemini CLI (v0.21.2) does not consistently emit a `description` field in the
 The `gemini-bridge.cjs` script checks `gemini-acp.log` size on startup.
 - **Limit**: 2MB (2 * 1024 * 1024 bytes).
 - **Action**: Renames current log to `.old` if limit exceeded.
+
+### History Replay (Late Joiners)
+The bridge keeps an in-memory ring buffer of recent JSON-RPC messages (max 2000).
+When a client connects, it can request a replay using WebSocket query params:
+
+- `limit`: last N messages
+- `since`: only messages after this UNIX timestamp (ms)
+- `before`: only messages before this UNIX timestamp (ms)
 
 ### Environment Variables
 - `GEMINI_PORT`: WebSocket port (default: 4444).
