@@ -221,9 +221,21 @@ export class AgentChatClient extends EventEmitter {
 
         if (delta.thought) {
             const rawChunk = delta.thought;
-            const newSegment = extractNewStreamSegment(last.thought, rawChunk);
-            if (newSegment) {
-                last.thought += newSegment;
+
+            // Logic change: rectify against the CURRENT active thought part
+            let lastPart = last.content[last.content.length - 1];
+            if (!lastPart || lastPart.type !== 'thought') {
+                lastPart = { type: 'thought', thought: '' };
+                last.content.push(lastPart);
+            }
+
+            const currentPartThought = lastPart.type === 'thought' ? lastPart.thought : '';
+            const newSegment = extractNewStreamSegment(currentPartThought, rawChunk);
+
+            if (newSegment && lastPart.type === 'thought') {
+                lastPart.thought += newSegment;
+                last.thought += newSegment; // Update global thought for legacy
+
                 this.emit('thought_delta', { messageId: last.id, delta: newSegment, thought: last.thought });
                 this.emit('assistant_thought_delta', { messageId: last.id, delta: newSegment, thought: last.thought });
                 this.emit('message_update', last);
@@ -232,9 +244,24 @@ export class AgentChatClient extends EventEmitter {
 
         if (delta.text) {
             const rawChunk = delta.text;
-            const newSegment = extractNewStreamSegment(last.text, rawChunk);
-            if (newSegment) {
-                last.text += newSegment;
+
+            // Logic change: we must rectify against the CURRENT active text part, not the global text
+            // 1. Find or create active text part
+            let lastPart = last.content[last.content.length - 1];
+            if (!lastPart || lastPart.type !== 'text') {
+                lastPart = { type: 'text', text: '' };
+                last.content.push(lastPart);
+            }
+
+            const currentPartText = lastPart.type === 'text' ? lastPart.text : ''; // Should be text
+
+            // 2. Rectify relative to THAT part
+            const newSegment = extractNewStreamSegment(currentPartText, rawChunk);
+
+            if (newSegment && lastPart.type === 'text') {
+                lastPart.text += newSegment; // Update structured content
+                last.text += newSegment;     // Update flat text (legacy)
+
                 this.emit('text_delta', { messageId: last.id, delta: newSegment, text: last.text });
                 this.emit('assistant_text_delta', { messageId: last.id, delta: newSegment, text: last.text });
                 this.emit('message_update', last);
@@ -268,6 +295,9 @@ export class AgentChatClient extends EventEmitter {
         };
 
         last.toolCalls.push(toolCall);
+        // Add to ordered content
+        last.content.push({ type: 'tool_call', call: toolCall });
+
         this.emit('tool_update', { messageId: last.id, toolCall });
         this.emit('tool_call_started', { messageId: last.id, toolCall });
         this.emit('message_update', last);
@@ -327,6 +357,7 @@ export class AgentChatClient extends EventEmitter {
                 role: 'assistant',
                 text: '',
                 thought: '',
+                content: [],
                 toolCalls: [],
                 ts: Date.now(),
             };

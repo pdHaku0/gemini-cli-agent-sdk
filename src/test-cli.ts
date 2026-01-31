@@ -17,14 +17,23 @@ const rl = readline.createInterface({
 
 // Stream tracking state
 let currentMessageId: string | null = null;
-let printedThoughtLength = 0;
-let printedTextLength = 0;
+// Track printed length for each content part index
+let printedContentLengths: number[] = [];
 const processedToolCalls = new Set<string>();
+
+client.on('connection_state_changed', (evt) => {
+    console.log(`\n[System] Connection state: ${evt.state}`);
+});
 
 client.on('session_ready', (sessionId) => {
     console.log(`\n[System] Session established: ${sessionId}`);
     console.log('Type your message below (or "exit" to quit):');
     promptUser();
+});
+
+client.on('turn_started', () => {
+    // Optional: clear spinner or just log
+    console.log(`\n[System] Turn started...`);
 });
 
 client.on('message', (msg) => {
@@ -38,58 +47,75 @@ client.on('message_update', (msg) => {
     // New message detection: print header
     if (currentMessageId !== assistantMsg.id) {
         currentMessageId = assistantMsg.id;
-        printedThoughtLength = 0;
-        printedTextLength = 0;
+        printedContentLengths = [];
         processedToolCalls.clear();
         console.log('\n[Assistant]');
     }
 
-    // Print Thought Diffs (Gray)
-    if (assistantMsg.thought && assistantMsg.thought.length > printedThoughtLength) {
-        const delta = assistantMsg.thought.substring(printedThoughtLength);
-        process.stdout.write(`\x1b[2m${delta}\x1b[0m`);
-        printedThoughtLength = assistantMsg.thought.length;
-    }
+    // Iterate over content parts in order
+    assistantMsg.content.forEach((part, index) => {
+        // Initialize length tracking for new parts
+        if (printedContentLengths.length <= index) {
+            printedContentLengths.push(0);
+        }
 
-    // Print Text Diffs (Standard)
-    if (assistantMsg.text && assistantMsg.text.length > printedTextLength) {
-        const delta = assistantMsg.text.substring(printedTextLength);
-        process.stdout.write(delta);
-        printedTextLength = assistantMsg.text.length;
-    }
+        const printedLen = printedContentLengths[index];
 
-    // Handle Tool Calls (Poll status for CLI logs)
-    assistantMsg.toolCalls.forEach(tc => {
-        const key = `${tc.id}-${tc.status}`;
-        if (!processedToolCalls.has(key)) {
-            if (tc.status === 'running') {
-                process.stdout.write('\n');
-                console.log(`\x1b[36m[Tool Input] ${tc.name}\x1b[0m`);
-                if (tc.description) console.log(`\x1b[90m  Purpose: ${tc.description}\x1b[0m`);
-                if (tc.workingDir) console.log(`\x1b[90m  Cwd: ${tc.workingDir}\x1b[0m`);
-
-                if (tc.args) {
-                    Object.entries(tc.args).forEach(([k, v]) => {
-                        console.log(`\x1b[90m  ${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}\x1b[0m`);
-                    });
-                } else if (tc.input) {
-                    console.log(`\x1b[90m  Input: ${tc.input}\x1b[0m`);
-                } else if (!tc.description && !tc.workingDir) {
-                    // Fallback if absolutely nothing else was extracted
-                    console.log(`\x1b[90m  Details: ${tc.title}\x1b[0m`);
-                }
-            } else if (tc.status === 'completed') {
-                process.stdout.write('\n');
-                console.log(`\x1b[32m[Tool Output] ${tc.name} completed.\x1b[0m`);
-                if (tc.result) {
-                    const snippet = tc.result.split('\n').slice(0, 5).join('\n');
-                    console.log(`\x1b[90m${snippet}${tc.result.split('\n').length > 5 ? '...' : ''}\x1b[0m`);
-                }
-            } else if (tc.status === 'failed') {
-                process.stdout.write('\n');
-                console.log(`\x1b[31m[Tool Error] ${tc.name} failed.\x1b[0m`);
+        if (part.type === 'thought') {
+            if (part.thought.length > printedLen) {
+                const delta = part.thought.substring(printedLen);
+                process.stdout.write(`\x1b[2m${delta}\x1b[0m`);
+                printedContentLengths[index] = part.thought.length;
             }
-            processedToolCalls.add(key);
+        }
+        else if (part.type === 'text') {
+            if (part.text.length > printedLen) {
+                const delta = part.text.substring(printedLen);
+                process.stdout.write(delta);
+                printedContentLengths[index] = part.text.length;
+            }
+        }
+        else if (part.type === 'tool_call') {
+            const tc = part.call;
+            const key = `${tc.id}-${tc.status}`;
+
+            if (!processedToolCalls.has(key)) {
+                if (tc.status === 'running') {
+                    // Only print running header once (when we first encounter it running)
+                    // The standard unique check handles this if status doesn't change
+                    // But if status changes running->running (update), we might reprint. 
+                    // Let's rely on standard logic but format cleanly.
+
+                    // Add newline before tool call if it follows text
+                    process.stdout.write('\n');
+                    console.log(`\x1b[36m[Tool Input] ${tc.name}\x1b[0m`);
+                    if (tc.description) console.log(`\x1b[90m  Purpose: ${tc.description}\x1b[0m`);
+
+                    // Print args/input details
+                    if (tc.args) {
+                        Object.entries(tc.args).forEach(([k, v]) => {
+                            console.log(`\x1b[90m  ${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}\x1b[0m`);
+                        });
+                    } else if (tc.input) {
+                        console.log(`\x1b[90m  Input: ${tc.input}\x1b[0m`);
+                    }
+
+                    if (tc.workingDir) console.log(`\x1b[90m  Cwd: ${tc.workingDir}\x1b[0m`);
+
+                } else if (tc.status === 'completed') {
+                    process.stdout.write('\n');
+                    console.log(`\x1b[32m[Tool Output] ${tc.name} completed.\x1b[0m`);
+                    if (tc.result) {
+                        const snippet = tc.result.split('\n').slice(0, 5).join('\n');
+                        console.log(`\x1b[90m${snippet}${tc.result.split('\n').length > 5 ? '...' : ''}\x1b[0m`);
+                    }
+                } else if (tc.status === 'failed') {
+                    process.stdout.write('\n');
+                    console.log(`\x1b[31m[Tool Error] ${tc.name} failed.\x1b[0m`);
+                }
+
+                processedToolCalls.add(key);
+            }
         }
     });
 });

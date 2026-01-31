@@ -72,6 +72,27 @@ await client.connect();
 await client.sendMessage('Hello!');
 ```
 
+### 5. Message Ordering & Rendering
+
+To correctly render messages where tool calls, text, and thoughts are interleaved (e.g., "Thinking..." -> "Finding file..." -> `ls` -> "Found it."), use the `content` array on `AssistantMessage`.
+
+```typescript
+// Example: Rendering Ordered Content
+const msg = client.getMessages().find(m => m.role === 'assistant');
+
+msg.content.forEach(part => {
+    if (part.type === 'text') {
+        renderText(part.text);
+    } else if (part.type === 'thought') {
+        renderThought(part.thought); 
+    } else if (part.type === 'tool_call') {
+        renderTool(part.call);
+    }
+});
+```
+
+`msg.text` is also available but contains a concatenated string of all text parts, losing the relative order with tool calls.
+
 ### 4. UI Events (Standardized)
 
 These events are added for GUI-friendly integrations (existing events are still emitted):

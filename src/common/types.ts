@@ -148,11 +148,17 @@ export interface ToolCall {
     ts: number;
 }
 
+export type MessageContentPart =
+    | { type: 'text'; text: string }
+    | { type: 'thought'; thought: string }
+    | { type: 'tool_call'; call: ToolCall };
+
 export interface AssistantMessage {
     id: string;
     role: 'assistant';
     thought: string;
     text: string;
+    content: MessageContentPart[];
     toolCalls: ToolCall[];
     stopReason?: string;
     ts: number;
