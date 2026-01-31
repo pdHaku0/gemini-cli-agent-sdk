@@ -1,6 +1,6 @@
 {
   "name": "@yohaku/gemini-cli-agent-sdk",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "type": "module",
   "description": "A high-level SDK for building AI Agent chat interfaces using Gemini ACP",
   "main": "dist/index.js",
@@ -11,6 +11,21 @@
     "client",
     "server"
   ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    },
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "tsc && node scripts/postbuild.mjs",
     "postbuild": "node scripts/postbuild.mjs",
