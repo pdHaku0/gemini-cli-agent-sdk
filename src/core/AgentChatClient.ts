@@ -127,7 +127,7 @@ export class AgentChatClient extends EventEmitter {
         try {
             result = await this.transport.sendRequest('session/prompt', {
                 sessionId: this.sessionId,
-                prompt: [{ type: 'text', text }],
+                prompt: [{ type: 'text', text, meta: { hidden: hiddenMode } }],
             });
         } catch (err) {
             if (this.shouldEmitAssistant(hiddenMode)) {
@@ -231,12 +231,16 @@ export class AgentChatClient extends EventEmitter {
                     const payload = (msg as any)?.params?.data;
                     const ts = (msg as any)?.params?.timestamp;
                     const replayId = (msg as any)?.params?.replayId;
+                    const hiddenMode = payload?.__hiddenMode ?? payload?.params?.meta?.hidden;
                     if (typeof ts === 'number') this.timeOverride = ts;
                     if (typeof replayId === 'string') this.replayNonce = replayId;
+                    if (typeof hiddenMode === 'string') {
+                        this.currentTurnHidden = hiddenMode as HiddenMode;
+                    }
                     if (payload?.method === 'session/update') {
                         this.handleSessionUpdate(payload as AcpSessionUpdateNotification);
                     } else if (payload?.method === 'session/prompt') {
-                        this.handleReplayPrompt(payload?.params?.prompt);
+                        this.handleReplayPrompt(payload?.params?.prompt, hiddenMode);
                     } else if (payload?.method === 'gemini/authUrl') {
                         this.handleAuthUrl(payload as AcpAuthUrlNotification);
                     } else {
@@ -654,7 +658,7 @@ export class AgentChatClient extends EventEmitter {
         return this.timeOverride ?? Date.now();
     }
 
-    private handleReplayPrompt(prompt: any) {
+    private handleReplayPrompt(prompt: any, hiddenMode?: HiddenMode) {
         const first = Array.isArray(prompt) ? prompt[0] : prompt;
         const text = first?.text ?? '';
         if (typeof text !== 'string' || !text.trim()) return;
@@ -662,6 +666,7 @@ export class AgentChatClient extends EventEmitter {
             id: this.makeId('user'),
             role: 'user',
             text,
+            hidden: hiddenMode === 'user' || hiddenMode === 'turn',
             ts: this.now(),
         };
         this.messages.push(userMsg);

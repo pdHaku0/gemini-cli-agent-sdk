@@ -39,6 +39,7 @@ export class GeminiBridge extends EventEmitter {
     private isAuthPending = false;
     private pendingAuthUrl: string | null = null;
     private currentTurnModifiedFiles = new Set<string>();
+    private turnHiddenModes = new Map<number, string>();
     private logFile: string;
     private projectRootReal: string;
 
@@ -400,13 +401,26 @@ export class GeminiBridge extends EventEmitter {
                     return;
                 }
 
-                this.geminiProcess.stdin.write(JSON.stringify(parsed) + '\n');
                 // Record client prompts for replay and advance turn id
                 if (parsed?.method === 'session/prompt') {
+                    const hiddenMode = parsed?.params?.prompt?.[0]?.meta?.hidden;
                     this.turnId += 1;
-                    this.history.push({ timestamp: Date.now(), data: { ...parsed, __turnId: this.turnId } });
+                    if (typeof hiddenMode === 'string') {
+                        this.turnHiddenModes.set(this.turnId, hiddenMode);
+                    }
+                    this.history.push({
+                        timestamp: Date.now(),
+                        data: { ...parsed, __turnId: this.turnId, __hiddenMode: hiddenMode },
+                    });
                     if (this.history.length > this.MAX_HISTORY_SIZE) this.history.shift();
+                    if (parsed?.params?.prompt?.[0]?.meta?.hidden) {
+                        delete parsed.params.prompt[0].meta.hidden;
+                        if (parsed.params.prompt[0].meta && Object.keys(parsed.params.prompt[0].meta).length === 0) {
+                            delete parsed.params.prompt[0].meta;
+                        }
+                    }
                 }
+                this.geminiProcess.stdin.write(JSON.stringify(parsed) + '\n');
             } catch {
                 this.geminiProcess.stdin.write(str + '\n');
             }
@@ -442,7 +456,7 @@ export class GeminiBridge extends EventEmitter {
             data?.method === 'bridge/structured_event';
         if (shouldStore) {
             const timestamp = Date.now();
-            const tagged = { ...data, __turnId: this.turnId };
+            const tagged = { ...data, __turnId: this.turnId, __hiddenMode: this.turnHiddenModes.get(this.turnId) };
             this.history.push({ timestamp, data: tagged });
             if (this.history.length > this.MAX_HISTORY_SIZE) {
                 this.history.shift(); // remove oldest

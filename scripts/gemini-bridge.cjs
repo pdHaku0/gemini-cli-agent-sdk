@@ -51,6 +51,7 @@ let syncTimeout = null;
 const history = [];
 const MAX_HISTORY_SIZE = 2000;
 let turnId = 0;
+const turnHiddenModes = new Map();
 
 async function syncChatHistoryToHost() {
     if (!SESSION_ID) {
@@ -328,7 +329,10 @@ function broadcast(data) {
         data?.method === 'session/request_permission' ||
         data?.method === 'gemini/authUrl';
     if (shouldStore) {
-        history.push({ timestamp: Date.now(), data: { ...data, __turnId: turnId } });
+        history.push({
+            timestamp: Date.now(),
+            data: { ...data, __turnId: turnId, __hiddenMode: turnHiddenModes.get(turnId) },
+        });
         if (history.length > MAX_HISTORY_SIZE) history.shift();
     }
     wss.clients.forEach(client => {
@@ -590,9 +594,22 @@ wss.on('connection', (ws, req) => {
 
             if (parsed?.method === 'session/prompt') {
                 // Advance turn id and record prompt for replay (do not broadcast live)
+                const hiddenMode = parsed?.params?.prompt?.[0]?.meta?.hidden;
                 turnId += 1;
-                history.push({ timestamp: Date.now(), data: { ...parsed, __turnId: turnId } });
+                if (typeof hiddenMode === 'string') {
+                    turnHiddenModes.set(turnId, hiddenMode);
+                }
+                history.push({
+                    timestamp: Date.now(),
+                    data: { ...parsed, __turnId: turnId, __hiddenMode: hiddenMode },
+                });
                 if (history.length > MAX_HISTORY_SIZE) history.shift();
+                if (parsed?.params?.prompt?.[0]?.meta?.hidden) {
+                    delete parsed.params.prompt[0].meta.hidden;
+                    if (parsed.params.prompt[0].meta && Object.keys(parsed.params.prompt[0].meta).length === 0) {
+                        delete parsed.params.prompt[0].meta;
+                    }
+                }
 
                 const prompt = parsed?.params?.prompt;
                 const messageId = Array.isArray(prompt) ? prompt?.[0]?.messageId : undefined;

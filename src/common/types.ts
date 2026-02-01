@@ -64,6 +64,9 @@ export interface AcpPromptParams {
     prompt: Array<{
         type: 'text';
         text: string;
+        meta?: {
+            hidden?: HiddenMode;
+        };
     }>;
 }
 
