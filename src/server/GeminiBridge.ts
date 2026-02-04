@@ -42,6 +42,7 @@ export class GeminiBridge extends EventEmitter {
     private turnHiddenModes = new Map<number, string>();
     private logFile: string;
     private projectRootReal: string;
+    private traceAcp: boolean;
 
     // History Persistence
     private history: { timestamp: number; data: any }[] = [];
@@ -68,6 +69,7 @@ export class GeminiBridge extends EventEmitter {
 
         this.logFile = path.join(this.projectRootReal, 'gemini-acp.log');
         this.rotateLog();
+        this.traceAcp = process.env.BRIDGE_TRACE_ACP === '1';
     }
 
     public start() {
@@ -448,6 +450,23 @@ export class GeminiBridge extends EventEmitter {
     }
 
     private broadcastPayload(data: any, forceStore = false) {
+        if (this.traceAcp) {
+            const method = data?.method;
+            const sessionUpdate = data?.params?.update?.sessionUpdate;
+            const toolCallId = data?.params?.update?.toolCallId;
+            const stopReason = data?.params?.update?.stopReason ?? data?.result?.stopReason;
+            const text = data?.params?.update?.content?.text;
+            const textLen = typeof text === 'string' ? text.length : undefined;
+            const type = data?.params?.update?.content?.type;
+            this.log(
+                `[Bridge TRACE] ${method || 'n/a'}${sessionUpdate ? `:${sessionUpdate}` : ''}` +
+                `${toolCallId ? ` toolCallId=${toolCallId}` : ''}` +
+                `${stopReason ? ` stopReason=${stopReason}` : ''}` +
+                `${type ? ` contentType=${type}` : ''}` +
+                `${typeof textLen === 'number' ? ` textLen=${textLen}` : ''}`
+            );
+        }
+
         // Record History (only replay-relevant messages)
         const shouldStore = forceStore ||
             data?.method === 'session/update' ||

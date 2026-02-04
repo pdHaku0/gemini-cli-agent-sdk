@@ -227,6 +227,9 @@ export class AgentChatClient extends EventEmitter {
                 case 'gemini/authUrl':
                     this.handleAuthUrl(msg as unknown as AcpAuthUrlNotification);
                     break;
+                case 'bridge/structured_event':
+                    this.emit('bridge/structured_event', (msg as any)?.params);
+                    break;
                 case 'bridge/replay': {
                     const payload = (msg as any)?.params?.data;
                     const ts = (msg as any)?.params?.timestamp;
@@ -243,6 +246,8 @@ export class AgentChatClient extends EventEmitter {
                         this.handleReplayPrompt(payload?.params?.prompt, hiddenMode);
                     } else if (payload?.method === 'gemini/authUrl') {
                         this.handleAuthUrl(payload as AcpAuthUrlNotification);
+                    } else if (payload?.method === 'bridge/structured_event') {
+                        this.emit('bridge/structured_event', (payload as any)?.params);
                     } else {
                         const update = payload?.params?.update;
                         if (update?.sessionUpdate) {

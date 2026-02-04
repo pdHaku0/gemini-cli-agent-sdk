@@ -23,12 +23,56 @@ client.on('connection_state_changed', (evt) => {
 
 client.on('session_ready', (sessionId) => {
     console.log(`\n[System] Session established: ${sessionId}`);
-    console.log('Type your message below (or "exit" to quit):');
-    promptUser();
+    (async () => {
+        try {
+            await client.sendMessage(
+                [
+                    'あなたは長時間動作するエージェントです。',
+                    'UIに出したくない機械可読の情報は SYS タグで囲んで出力してください。',
+                    '作業を始める前に、必ず「今から何をやります」の宣言をSYSタグで出してください。',
+                    '宣言は見出し用途で、以下の固定JSONスキーマのみを使ってください。',
+                    '',
+                    'スキーマ:',
+                    '<SYS_JSON>{"type":"heading","payload":{"title":"<短い見出し>","intent":"<これから何をするか>","scope":"<対象/範囲>","expected":"<期待される結果>"},"version":"1.0"}</SYS_JSON>',
+                    '',
+                    '使い方:',
+                    '<SYS_JSON>{"type":"tool.invoke","payload":{"name":"ping"}}</SYS_JSON>',
+                    '<SYS_BLOCK>{"type":"start","id":"b1","title":"Data Collection"}</SYS_BLOCK>',
+                    '',
+                    '通常の会話テキストはSYSタグの外に書いてください。',
+                    'SYSタグ内のJSONは壊さず、閉じタグまで必ず出力してください。'
+                ].join('\n'),
+                { hidden: 'turn' }
+            );
+        } catch (err) {
+            console.error('[System] Failed to send SYS tag primer:', err);
+        } finally {
+            console.log('Type your message below (or "exit" to quit):');
+            promptUser();
+        }
+    })();
 });
 
 client.on('turn_started', () => {
     console.log(`\n[System] Turn started...`);
+});
+
+client.on('bridge/structured_event', (evt) => {
+    if (!evt) return;
+    process.stdout.write('\n');
+    console.log(`\x1b[35m[SYS_EVENT] ${evt.type || 'unknown'}\x1b[0m`);
+    if (evt.error) {
+        console.log(`\x1b[31m  Error: ${evt.error}\x1b[0m`);
+    }
+    if (evt.payload !== undefined) {
+        const payloadText = typeof evt.payload === 'string' ? evt.payload : JSON.stringify(evt.payload);
+        const preview = payloadText.length > 300 ? `${payloadText.slice(0, 300)}...` : payloadText;
+        console.log(`\x1b[90m  Payload: ${preview}\x1b[0m`);
+    } else if (evt.raw) {
+        const rawText = String(evt.raw);
+        const preview = rawText.length > 300 ? `${rawText.slice(0, 300)}...` : rawText;
+        console.log(`\x1b[90m  Raw: ${preview}\x1b[0m`);
+    }
 });
 
 store.subscribe((state) => {

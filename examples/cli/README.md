@@ -21,3 +21,21 @@ You can set the bridge URL with:
 ```bash
 GEMINI_WS_URL=ws://localhost:4444 node examples/cli/index.js
 ```
+
+## SYS tags (optional)
+
+If your bridge is configured with SYS tag parsing (see `docs/USAGE.md`), this CLI will
+print structured events as `[SYS_EVENT] ...`.
+
+Minimal bridge setup (server-side):
+
+```ts
+import { GeminiBridge } from '@pdhaku0/gemini-cli-agent-sdk/server';
+import { createSysTagTransform } from '@pdhaku0/gemini-cli-agent-sdk/extras';
+
+const bridge = new GeminiBridge({
+  outgoingTransform: createSysTagTransform({ mode: 'event' }),
+});
+
+bridge.start();
+```
