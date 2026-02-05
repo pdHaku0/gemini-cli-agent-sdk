@@ -25,6 +25,14 @@
 - Make sure you pass `before` as a UNIX timestamp in **ms**.
 - Replay relies on bridge in-memory history; restarting the bridge clears it.
 
+## SYS_EVENT / `bridge/structured_event` not appearing
+
+- Ensure SYS tag capture is enabled on the bridge:
+  - Default: `npm run start:bridge`
+  - Disable capture: `SYS_TAG_MODE=raw npm run start:bridge`
+  - Keep tags + emit events: `SYS_TAG_MODE=both npm run start:bridge`
+  - Legacy bridge (no SYS tags): `npm run start:bridge:legacy`
+
 ## Replay returns empty even though bridge says "Replaying"
 
 - Ensure you are running the updated SDK build (rebuild after local changes if using `file:` dependency).

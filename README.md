@@ -31,6 +31,14 @@ npm install @pdhaku0/gemini-cli-agent-sdk
 npm run start:bridge
 ```
 
+By default this enables SYS tag capture and emits `bridge/structured_event`.
+You can control it with:
+
+```bash
+SYS_TAG_MODE=raw   npm run start:bridge   # disable capture
+SYS_TAG_MODE=both  npm run start:bridge   # keep tags + emit events
+```
+
 ### 2) Connect a client
 
 ```ts

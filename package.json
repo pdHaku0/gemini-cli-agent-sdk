@@ -36,7 +36,8 @@
     "dev": "tsc -w",
     "test": "jest",
     "lint": "eslint src/**/*.ts",
-    "start:bridge": "export GEMINI_PORT=4444 && node scripts/gemini-bridge.cjs",
+    "start:bridge": "node scripts/start-bridge.mjs",
+    "start:bridge:legacy": "export GEMINI_PORT=4444 && node scripts/gemini-bridge.cjs",
     "prepare": "npm run build"
   },
   "keywords": [
