@@ -54,7 +54,8 @@ NEXT_PUBLIC_GEMINI_CWD=/home/yohaku/gemini-cli-agent-sdk npm run dev
 
 ## Session persistence
 
-The example stores `sessionId` in localStorage and reuses it after page reload.
+The example stores `sessionId` in an HTTP-only cookie via a Next.js route handler
+(`app/api/session/route.ts`) and reuses it after page reload.
 If the bridge restarts, a new session is created automatically.
 
 ## Structured events (optional)

@@ -7,7 +7,6 @@ import ToolCallView from './ToolCallView';
 
 const INITIAL_REPLAY_LIMIT = 15;
 const LOAD_OLDER_LIMIT = 10;
-const SESSION_STORAGE_KEY = 'agentchat_session_id';
 
 let sharedClient: AgentChatClient | null = null;
 let sharedStore: AgentChatStore | null = null;
@@ -31,6 +30,8 @@ export default function AgentChat() {
   const [authCode, setAuthCode] = useState('');
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [lastReplayTs, setLastReplayTs] = useState<number | null>(null);
+  const [serverSessionId, setServerSessionId] = useState<string | null>(null);
+  const [sessionLoaded, setSessionLoaded] = useState(false);
   const [structuredEvents, setStructuredEvents] = useState<
     Array<{
       seq?: number;
@@ -54,26 +55,60 @@ export default function AgentChat() {
     return 'ws://127.0.0.1:4444';
   }, []);
 
-  const storedSessionId = useMemo(() => {
-    if (typeof window === 'undefined') return null;
-    return window.localStorage.getItem(SESSION_STORAGE_KEY);
+  useEffect(() => {
+    let canceled = false;
+    const run = async () => {
+      try {
+        const res = await fetch('/api/session');
+        const json = await res.json();
+        if (!canceled) {
+          setServerSessionId(typeof json?.sessionId === 'string' ? json.sessionId : null);
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (!canceled) setSessionLoaded(true);
+      }
+    };
+    run();
+    return () => {
+      canceled = true;
+    };
   }, []);
 
-  const { client, store } = useMemo(
-    () => getClientStore(resolvedUrl, storedSessionId),
-    [resolvedUrl, storedSessionId]
-  );
-  const [state, setState] = useState<AgentChatState>(() => store.getState());
+  const clientStore = useMemo(() => {
+    if (!sessionLoaded) return null;
+    return getClientStore(resolvedUrl, serverSessionId);
+  }, [resolvedUrl, serverSessionId, sessionLoaded]);
+
+  const client = clientStore?.client ?? null;
+  const store = clientStore?.store ?? null;
+
+  const [state, setState] = useState<AgentChatState>(() => ({
+    connectionState: 'disconnected',
+    isStreaming: false,
+    messages: [],
+    pendingApproval: null,
+    authUrl: null,
+    lastStopReason: null,
+    lastError: null,
+  }));
+
   const loadedTurns = useMemo(
     () => state.messages.filter((m) => m.role === 'user').length,
     [state.messages]
   );
 
   useEffect(() => {
+    if (!client || !store) return;
     const unsubscribe = store.subscribe(setState);
     const handleSessionReady = (sessionId: string) => {
-      if (typeof window === 'undefined') return;
-      window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+      setServerSessionId((prev) => prev ?? sessionId);
+      fetch('/api/session', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      }).catch((err) => console.error(err));
     };
     const handleStructuredEvent = (params: any, meta?: AgentChatEventMeta) => {
       const m: AgentChatEventMeta | undefined = meta || params?.__eventMeta;
@@ -133,6 +168,22 @@ export default function AgentChat() {
       setIsLoadingOlder(false);
     }
   };
+
+  if (!sessionLoaded) {
+    return (
+      <section style={{ marginTop: 20, border: '1px solid #e2d7c8', padding: 16, background: '#fffaf2' }}>
+        <div style={{ fontSize: 12, color: '#6e6258' }}>Loading session...</div>
+      </section>
+    );
+  }
+
+  if (!client || !store) {
+    return (
+      <section style={{ marginTop: 20, border: '1px solid #e2d7c8', padding: 16, background: '#fffaf2' }}>
+        <div style={{ fontSize: 12, color: '#6e6258' }}>Failed to initialize client.</div>
+      </section>
+    );
+  }
 
   return (
     <section style={{ marginTop: 20, border: '1px solid #e2d7c8', padding: 16, background: '#fffaf2' }}>
