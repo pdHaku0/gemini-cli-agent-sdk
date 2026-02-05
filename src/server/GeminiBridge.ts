@@ -450,14 +450,17 @@ export class GeminiBridge extends EventEmitter {
     }
 
     private broadcastPayload(data: any, forceStore = false) {
+        const hiddenMode = this.turnHiddenModes.get(this.turnId);
+        const dataWithHidden = this.attachHiddenMode(data, hiddenMode);
+
         if (this.traceAcp) {
-            const method = data?.method;
-            const sessionUpdate = data?.params?.update?.sessionUpdate;
-            const toolCallId = data?.params?.update?.toolCallId;
-            const stopReason = data?.params?.update?.stopReason ?? data?.result?.stopReason;
-            const text = data?.params?.update?.content?.text;
+            const method = dataWithHidden?.method;
+            const sessionUpdate = dataWithHidden?.params?.update?.sessionUpdate;
+            const toolCallId = dataWithHidden?.params?.update?.toolCallId;
+            const stopReason = dataWithHidden?.params?.update?.stopReason ?? dataWithHidden?.result?.stopReason;
+            const text = dataWithHidden?.params?.update?.content?.text;
             const textLen = typeof text === 'string' ? text.length : undefined;
-            const type = data?.params?.update?.content?.type;
+            const type = dataWithHidden?.params?.update?.content?.type;
             this.log(
                 `[Bridge TRACE] ${method || 'n/a'}${sessionUpdate ? `:${sessionUpdate}` : ''}` +
                 `${toolCallId ? ` toolCallId=${toolCallId}` : ''}` +
@@ -469,13 +472,13 @@ export class GeminiBridge extends EventEmitter {
 
         // Record History (only replay-relevant messages)
         const shouldStore = forceStore ||
-            data?.method === 'session/update' ||
-            data?.method === 'session/request_permission' ||
-            data?.method === 'gemini/authUrl' ||
-            data?.method === 'bridge/structured_event';
+            dataWithHidden?.method === 'session/update' ||
+            dataWithHidden?.method === 'session/request_permission' ||
+            dataWithHidden?.method === 'gemini/authUrl' ||
+            dataWithHidden?.method === 'bridge/structured_event';
         if (shouldStore) {
             const timestamp = Date.now();
-            const tagged = { ...data, __turnId: this.turnId, __hiddenMode: this.turnHiddenModes.get(this.turnId) };
+            const tagged = { ...dataWithHidden, __turnId: this.turnId, __hiddenMode: this.turnHiddenModes.get(this.turnId) };
             this.history.push({ timestamp, data: tagged });
             if (this.history.length > this.MAX_HISTORY_SIZE) {
                 this.history.shift(); // remove oldest
@@ -483,7 +486,7 @@ export class GeminiBridge extends EventEmitter {
         }
 
         if (!this.wss) return;
-        const str = JSON.stringify(data);
+        const str = JSON.stringify(dataWithHidden);
         this.wss.clients.forEach((client: WebSocket) => {
             if (client.readyState === WebSocket.OPEN) {
                 client.send(str);
@@ -491,13 +494,39 @@ export class GeminiBridge extends EventEmitter {
         });
 
         // Trigger checkpoint on turn end
-        const updateType = data?.params?.update?.sessionUpdate || data.sessionUpdate;
+        const updateType = dataWithHidden?.params?.update?.sessionUpdate || dataWithHidden.sessionUpdate;
         if (updateType === 'end_of_turn' || updateType === 'response.completed') {
             if (this.currentTurnModifiedFiles.size > 0) {
                 this.triggerCheckpoint(Array.from(this.currentTurnModifiedFiles));
                 this.currentTurnModifiedFiles.clear();
             }
         }
+    }
+
+    private attachHiddenMode(data: any, hiddenMode: unknown) {
+        if (!hiddenMode || typeof hiddenMode !== 'string') return data;
+        if (!data || typeof data !== 'object') return data;
+        if (data.__hiddenMode !== undefined) return data;
+
+        // Attach both:
+        // - top-level `__hiddenMode` for easy consumption
+        // - `params.meta.hidden` for UI/client logic
+        const params = data.params && typeof data.params === 'object' ? data.params : null;
+        if (!params) {
+            return { ...data, __hiddenMode: hiddenMode };
+        }
+        const meta = params.meta && typeof params.meta === 'object' ? params.meta : {};
+        if ((meta as any).hidden !== undefined) {
+            return { ...data, __hiddenMode: hiddenMode };
+        }
+        return {
+            ...data,
+            __hiddenMode: hiddenMode,
+            params: {
+                ...params,
+                meta: { ...(meta as any), hidden: hiddenMode },
+            },
+        };
     }
 
     private async triggerCheckpoint(files: string[]) {

@@ -238,4 +238,23 @@ describe('AgentChatClient Message Ordering', () => {
         expect(seen[0].params.__replay.replayId).toBe('replay-1');
         expect(seen[0].params.__replay.timestamp).toBe(123456);
     });
+
+    test('should honor hidden injected via server meta on live notifications', async () => {
+        mockTransport.emitServerEvent('session/update', {
+            meta: { hidden: 'assistant' },
+            update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { text: 'secret' }
+            }
+        });
+
+        // Hidden assistant message should not appear in default getMessages()
+        expect(client.getMessages()).toHaveLength(0);
+
+        // But it should exist if includeHidden is requested
+        const all = client.getMessages({ includeHidden: true });
+        expect(all).toHaveLength(1);
+        expect(all[0].role).toBe('assistant');
+        expect(all[0].hidden).toBe(true);
+    });
 });

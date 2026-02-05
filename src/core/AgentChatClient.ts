@@ -238,15 +238,31 @@ export class AgentChatClient extends EventEmitter {
         });
         this.transport.on('notification', (msg: JsonRpcMessage) => {
             const meta = this.nextEventMeta();
+            const injectedHidden =
+                (msg as any)?.__hiddenMode ??
+                (msg as any)?.params?.meta?.hidden ??
+                (msg as any)?.params?.update?.meta?.hidden;
             switch (msg.method) {
                 case 'session/update':
-                    this.withEventMeta(meta, () => this.handleSessionUpdate(msg as unknown as AcpSessionUpdateNotification));
+                    this.withEventMeta(meta, () =>
+                        this.withHiddenMode(injectedHidden, () =>
+                            this.handleSessionUpdate(msg as unknown as AcpSessionUpdateNotification)
+                        )
+                    );
                     break;
                 case 'gemini/authUrl':
-                    this.withEventMeta(meta, () => this.handleAuthUrl(msg as unknown as AcpAuthUrlNotification));
+                    this.withEventMeta(meta, () =>
+                        this.withHiddenMode(injectedHidden, () =>
+                            this.handleAuthUrl(msg as unknown as AcpAuthUrlNotification)
+                        )
+                    );
                     break;
                 case 'session/request_permission':
-                    this.withEventMeta(meta, () => this.handlePermissionRequest(msg as unknown as AcpRequestPermissionNotification));
+                    this.withEventMeta(meta, () =>
+                        this.withHiddenMode(injectedHidden, () =>
+                            this.handlePermissionRequest(msg as unknown as AcpRequestPermissionNotification)
+                        )
+                    );
                     break;
                 case 'bridge/structured_event':
                     this.withEventMeta(meta, () => {
@@ -299,12 +315,14 @@ export class AgentChatClient extends EventEmitter {
                     break;
                 }
                 default: {
-                    this.withEventMeta(meta, () => {
-                        const update = (msg as any)?.params?.update;
-                        if (update?.sessionUpdate) {
-                            this.handleSessionUpdate({ method: 'session/update', params: { update } } as AcpSessionUpdateNotification);
-                        }
-                    });
+                    this.withEventMeta(meta, () =>
+                        this.withHiddenMode(injectedHidden, () => {
+                            const update = (msg as any)?.params?.update;
+                            if (update?.sessionUpdate) {
+                                this.handleSessionUpdate({ method: 'session/update', params: { update } } as AcpSessionUpdateNotification);
+                            }
+                        })
+                    );
                     break;
                 }
             }
@@ -772,6 +790,17 @@ export class AgentChatClient extends EventEmitter {
             return params;
         }
         return { ...(params as any), __eventMeta: meta, ...(replay ? { __replay: replay } : {}) };
+    }
+
+    private withHiddenMode<T>(hiddenMode: unknown, fn: () => T): T {
+        if (typeof hiddenMode !== 'string') return fn();
+        const prev = this.currentTurnHidden;
+        this.currentTurnHidden = hiddenMode as HiddenMode;
+        try {
+            return fn();
+        } finally {
+            this.currentTurnHidden = prev;
+        }
     }
 
     private buildUrlWithReplay(baseUrl: string, replay?: AgentChatClientOptions['replay']) {
