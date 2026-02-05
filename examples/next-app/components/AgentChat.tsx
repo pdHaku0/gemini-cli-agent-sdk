@@ -12,6 +12,16 @@ let sharedClient: AgentChatClient | null = null;
 let sharedStore: AgentChatStore | null = null;
 
 function getClientStore(url: string, sessionId: string | null) {
+  const currentSessionId = sharedClient?.getSessionId() ?? null;
+  const desiredSessionId = sessionId ?? null;
+
+  if (sharedClient && currentSessionId !== desiredSessionId) {
+    sharedStore?.dispose();
+    sharedClient.dispose();
+    sharedClient = null;
+    sharedStore = null;
+  }
+
   if (!sharedClient) {
     const defaultCwd = process.env.NEXT_PUBLIC_GEMINI_CWD || 'examples/next-app/playground';
     sharedClient = new AgentChatClient({
@@ -25,6 +35,18 @@ function getClientStore(url: string, sessionId: string | null) {
   return { client: sharedClient, store: sharedStore as AgentChatStore };
 }
 
+function resetClientStore() {
+  sharedStore?.dispose();
+  sharedClient?.dispose();
+  sharedClient = null;
+  sharedStore = null;
+}
+
+function isLikelyStaleSessionError(err: unknown) {
+  const msg = String((err as any)?.message ?? err ?? '');
+  return /session.+not found|unknown session|invalid session/i.test(msg);
+}
+
 export default function AgentChat() {
   const [input, setInput] = useState('');
   const [authCode, setAuthCode] = useState('');
@@ -32,6 +54,7 @@ export default function AgentChat() {
   const [lastReplayTs, setLastReplayTs] = useState<number | null>(null);
   const [serverSessionId, setServerSessionId] = useState<string | null>(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
+  const [clientKey, setClientKey] = useState(0);
   const [structuredEvents, setStructuredEvents] = useState<
     Array<{
       seq?: number;
@@ -54,6 +77,19 @@ export default function AgentChat() {
     }
     return 'ws://127.0.0.1:4444';
   }, []);
+
+  const clearServerSession = async () => {
+    try {
+      await fetch('/api/session', { method: 'DELETE' });
+    } catch (err) {
+      console.error(err);
+    }
+    setServerSessionId(null);
+    setLastReplayTs(null);
+    setStructuredEvents([]);
+    resetClientStore();
+    setClientKey((k) => k + 1);
+  };
 
   useEffect(() => {
     let canceled = false;
@@ -79,7 +115,7 @@ export default function AgentChat() {
   const clientStore = useMemo(() => {
     if (!sessionLoaded) return null;
     return getClientStore(resolvedUrl, serverSessionId);
-  }, [resolvedUrl, serverSessionId, sessionLoaded]);
+  }, [resolvedUrl, serverSessionId, sessionLoaded, clientKey]);
 
   const client = clientStore?.client ?? null;
   const store = clientStore?.store ?? null;
@@ -149,6 +185,7 @@ export default function AgentChat() {
 
   const loadOlder = async () => {
     if (isLoadingOlder) return;
+    if (!client) return;
     const beforeRaw = oldestTimestamp(state.messages);
     const before = beforeRaw !== null ? Math.max(0, beforeRaw - 1) : null;
     if (before === null) return;
@@ -192,6 +229,11 @@ export default function AgentChat() {
         <span>streaming: {state.isStreaming ? 'yes' : 'no'}</span>
         {state.lastStopReason && <span>stop: {state.lastStopReason}</span>}
         {Boolean(state.lastError) && <span>error: {String(state.lastError)}</span>}
+        {serverSessionId ? (
+          <button type="button" onClick={clearServerSession} style={{ marginLeft: 'auto' }}>
+            Reset session
+          </button>
+        ) : null}
       </div>
 
       {state.authUrl && (
@@ -240,14 +282,16 @@ export default function AgentChat() {
                 .slice(-50)
                 .map((evt, i) => (
                   <div key={`${evt.seq ?? 'na'}-${i}`} style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600 }}>
-                      #{evt.seq ?? '?'} {evt.type || 'unknown'}{evt.replayId ? ' (replay)' : ''}
-                    </div>
-                    {evt.error && <div style={{ color: '#a40000' }}>error: {String(evt.error)}</div>}
-                    {evt.payload !== undefined ? (
-                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12, color: '#6e6258' }}>
-                        {typeof evt.payload === 'string' ? evt.payload : JSON.stringify(evt.payload, null, 2)}
-                      </pre>
+	                    <div style={{ fontSize: 12, fontWeight: 600 }}>
+	                      #{evt.seq ?? '?'} {evt.type || 'unknown'}{evt.replayId ? ' (replay)' : ''}
+	                    </div>
+	                    {evt.error != null && (
+	                      <div style={{ color: '#a40000' }}>error: {String(evt.error)}</div>
+	                    )}
+	                    {evt.payload !== undefined ? (
+	                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12, color: '#6e6258' }}>
+	                        {typeof evt.payload === 'string' ? evt.payload : JSON.stringify(evt.payload, null, 2)}
+	                      </pre>
                     ) : evt.raw ? (
                       <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12, color: '#6e6258' }}>
                         {String(evt.raw)}
@@ -299,7 +343,25 @@ export default function AgentChat() {
           const trimmed = input.trim();
           if (!trimmed) return;
           setInput('');
-          client.sendMessage(trimmed).catch(console.error);
+          (async () => {
+            try {
+              await client.sendMessage(trimmed);
+            } catch (err) {
+              if (isLikelyStaleSessionError(err)) {
+                await clearServerSession();
+                try {
+                  const fresh = getClientStore(resolvedUrl, null).client;
+                  await fresh.connect();
+                  await fresh.sendMessage(trimmed);
+                  return;
+                } catch (retryErr) {
+                  console.error(retryErr);
+                  return;
+                }
+              }
+              console.error(err);
+            }
+          })();
         }}
         style={{ display: 'flex', gap: 8, marginTop: 12 }}
       >

@@ -56,7 +56,8 @@ NEXT_PUBLIC_GEMINI_CWD=/home/yohaku/gemini-cli-agent-sdk npm run dev
 
 The example stores `sessionId` in an HTTP-only cookie via a Next.js route handler
 (`app/api/session/route.ts`) and reuses it after page reload.
-If the bridge restarts, a new session is created automatically.
+If the bridge restarts and the session becomes invalid, the example auto-resets the
+stored session and retries once (or you can click "Reset session").
 
 ## Structured events (optional)
 

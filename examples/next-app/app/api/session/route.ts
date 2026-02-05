@@ -33,3 +33,7 @@ export async function POST(req: Request) {
   return NextResponse.json({ ok: true });
 }
 
+export function DELETE() {
+  cookies().delete(COOKIE_NAME);
+  return NextResponse.json({ ok: true });
+}
