@@ -31,6 +31,19 @@ Set `NEXT_PUBLIC_GEMINI_WS_URL`:
 NEXT_PUBLIC_GEMINI_WS_URL=ws://localhost:4444 npm run dev
 ```
 
+## Default bridge URL behavior
+
+If `NEXT_PUBLIC_GEMINI_WS_URL` is not set, the app resolves the bridge URL from the current page host:
+
+- `http://<host>:3000` → `ws://<host>:4444`
+- `https://<host>` → `wss://<host>:4444`
+
+You can override just the port with:
+
+```bash
+NEXT_PUBLIC_GEMINI_WS_PORT=4444 npm run dev
+```
+
 ## Optional: set working directory (cwd)
 
 By default, the Next app sends `examples/next-app/playground`. You can override it:

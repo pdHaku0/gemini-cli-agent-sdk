@@ -47,9 +47,11 @@ export default function AgentChat() {
   const resolvedUrl = useMemo(() => {
     if (process.env.NEXT_PUBLIC_GEMINI_WS_URL) return process.env.NEXT_PUBLIC_GEMINI_WS_URL;
     if (typeof window !== 'undefined' && window.location?.hostname) {
-      return `ws://${window.location.hostname}:4444`;
+      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const port = process.env.NEXT_PUBLIC_GEMINI_WS_PORT || '4444';
+      return `${proto}://${window.location.hostname}:${port}`;
     }
-    return 'ws://localhost:4444';
+    return 'ws://127.0.0.1:4444';
   }, []);
 
   const storedSessionId = useMemo(() => {
