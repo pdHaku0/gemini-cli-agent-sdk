@@ -8,6 +8,7 @@ import {
     AcpSessionUpdateNotification,
     AcpRequestPermissionNotification,
     AcpAuthUrlNotification,
+    AgentChatEventMeta,
     JsonRpcMessage,
     ConnectionState,
     PendingApproval,
@@ -45,6 +46,8 @@ export class AgentChatClient extends EventEmitter {
     private idCounter = 0;
     private replayNonce: string | null = null;
     private currentTurnHidden: HiddenMode = 'none';
+    private eventSeq = 0;
+    private activeEventMeta: AgentChatEventMeta | null = null;
 
     constructor(options: AgentChatClientOptions) {
         super();
@@ -106,22 +109,27 @@ export class AgentChatClient extends EventEmitter {
         const hiddenMode = options.hidden ?? 'none';
         this.currentTurnHidden = hiddenMode;
 
-        const userMsg: ChatMessage = {
-            id: this.makeId('user'),
-            role: 'user',
-            text,
-            hidden: hiddenMode === 'user' || hiddenMode === 'turn',
-            ts: Date.now(),
-        };
-        this.messages.push(userMsg);
-        if (this.shouldEmitUser(hiddenMode)) {
-            this.emit('message', userMsg);
-        }
-        this.inTurn = true;
-        this.activeAssistantId = null;
-        if (this.shouldEmitAssistant(hiddenMode)) {
-            this.emit('turn_started', { userMessageId: userMsg.id });
-        }
+        const meta = this.nextEventMeta();
+        let userMsg!: ChatMessage;
+        this.withEventMeta(meta, () => {
+            userMsg = {
+                id: this.makeId('user'),
+                role: 'user',
+                text,
+                hidden: hiddenMode === 'user' || hiddenMode === 'turn',
+                ts: Date.now(),
+                seq: meta.seq,
+            };
+            this.messages.push(userMsg);
+            if (this.shouldEmitUser(hiddenMode)) {
+                this.emit('message', userMsg, meta);
+            }
+            this.inTurn = true;
+            this.activeAssistantId = null;
+            if (this.shouldEmitAssistant(hiddenMode)) {
+                this.emit('turn_started', { userMessageId: userMsg.id }, meta);
+            }
+        });
 
         let result: any;
         try {
@@ -131,7 +139,8 @@ export class AgentChatClient extends EventEmitter {
             });
         } catch (err) {
             if (this.shouldEmitAssistant(hiddenMode)) {
-                this.emit('turn_completed', 'error');
+                const errMeta = this.nextEventMeta();
+                this.emit('turn_completed', 'error', errMeta);
             }
             this.inTurn = false;
             this.currentTurnHidden = 'none';
@@ -142,8 +151,12 @@ export class AgentChatClient extends EventEmitter {
             const last = this.getOrCreateAssistantMessage();
             last.stopReason = result.stopReason;
             if (this.shouldEmitAssistant(hiddenMode)) {
-                this.emit('message_update', last);
-                this.emit('turn_completed', result.stopReason);
+                const resultMeta = this.nextEventMeta();
+                this.withEventMeta(resultMeta, () => {
+                    (last as any).seq = resultMeta.seq;
+                    this.emit('message_update', last, resultMeta);
+                    this.emit('turn_completed', result.stopReason, resultMeta);
+                });
                 if (this.lastFinalizedAssistantId !== last.id) {
                     this.emit('assistant_text_final', { messageId: last.id, text: last.text });
                     this.lastFinalizedAssistantId = last.id;
@@ -189,7 +202,11 @@ export class AgentChatClient extends EventEmitter {
         this.emit('messages_replayed', { count: messages.length });
         const last = this.messages[this.messages.length - 1];
         if (!last.hidden) {
-            this.emit('message_update', last);
+            const meta = this.nextEventMeta();
+            this.withEventMeta(meta, () => {
+                (last as any).seq = meta.seq;
+                this.emit('message_update', last, meta);
+            });
         }
     }
 
@@ -220,60 +237,82 @@ export class AgentChatClient extends EventEmitter {
             this.emit('error', err);
         });
         this.transport.on('notification', (msg: JsonRpcMessage) => {
+            const meta = this.nextEventMeta();
             switch (msg.method) {
                 case 'session/update':
-                    this.handleSessionUpdate(msg as unknown as AcpSessionUpdateNotification);
+                    this.withEventMeta(meta, () => this.handleSessionUpdate(msg as unknown as AcpSessionUpdateNotification));
                     break;
                 case 'gemini/authUrl':
-                    this.handleAuthUrl(msg as unknown as AcpAuthUrlNotification);
+                    this.withEventMeta(meta, () => this.handleAuthUrl(msg as unknown as AcpAuthUrlNotification));
+                    break;
+                case 'session/request_permission':
+                    this.withEventMeta(meta, () => this.handlePermissionRequest(msg as unknown as AcpRequestPermissionNotification));
                     break;
                 case 'bridge/structured_event':
-                    this.emit('bridge/structured_event', (msg as any)?.params);
+                    this.withEventMeta(meta, () => {
+                        const params = (msg as any)?.params;
+                        const enriched = this.attachEventMetaToParams(params, meta);
+                        this.emit('bridge/structured_event', enriched, meta);
+                    });
                     break;
                 case 'bridge/replay': {
                     const payload = (msg as any)?.params?.data;
                     const ts = (msg as any)?.params?.timestamp;
                     const replayId = (msg as any)?.params?.replayId;
                     const hiddenMode = payload?.__hiddenMode ?? payload?.params?.meta?.hidden;
-                    if (typeof ts === 'number') this.timeOverride = ts;
-                    if (typeof replayId === 'string') this.replayNonce = replayId;
-                    if (typeof hiddenMode === 'string') {
-                        this.currentTurnHidden = hiddenMode as HiddenMode;
-                    }
-                    if (payload?.method === 'session/update') {
-                        this.handleSessionUpdate(payload as AcpSessionUpdateNotification);
-                    } else if (payload?.method === 'session/prompt') {
-                        this.handleReplayPrompt(payload?.params?.prompt, hiddenMode);
-                    } else if (payload?.method === 'gemini/authUrl') {
-                        this.handleAuthUrl(payload as AcpAuthUrlNotification);
-                    } else if (payload?.method === 'bridge/structured_event') {
-                        this.emit('bridge/structured_event', (payload as any)?.params);
-                    } else {
-                        const update = payload?.params?.update;
-                        if (update?.sessionUpdate) {
-                            this.handleSessionUpdate({ method: 'session/update', params: { update } } as AcpSessionUpdateNotification);
+
+                    const replayMeta: AgentChatEventMeta = {
+                        ...meta,
+                        replayId: typeof replayId === 'string' ? replayId : undefined,
+                        replayTimestamp: typeof ts === 'number' ? ts : undefined,
+                    };
+
+                    this.withEventMeta(replayMeta, () => {
+                        if (typeof ts === 'number') this.timeOverride = ts;
+                        if (typeof replayId === 'string') this.replayNonce = replayId;
+                        if (typeof hiddenMode === 'string') {
+                            this.currentTurnHidden = hiddenMode as HiddenMode;
                         }
-                    }
-                    this.timeOverride = null;
-                    this.replayNonce = null;
+
+                        if (payload?.method === 'session/update') {
+                            this.handleSessionUpdate(payload as AcpSessionUpdateNotification);
+                        } else if (payload?.method === 'session/prompt') {
+                            this.handleReplayPrompt(payload?.params?.prompt, hiddenMode);
+                        } else if (payload?.method === 'gemini/authUrl') {
+                            this.handleAuthUrl(payload as AcpAuthUrlNotification);
+                        } else if (payload?.method === 'session/request_permission') {
+                            this.handlePermissionRequest(payload as AcpRequestPermissionNotification);
+                        } else if (payload?.method === 'bridge/structured_event') {
+                            const params = (payload as any)?.params;
+                            const enriched = this.attachEventMetaToParams(params, replayMeta);
+                            this.emit('bridge/structured_event', enriched, replayMeta);
+                        } else {
+                            const update = payload?.params?.update;
+                            if (update?.sessionUpdate) {
+                                this.handleSessionUpdate({ method: 'session/update', params: { update } } as AcpSessionUpdateNotification);
+                            }
+                        }
+
+                        this.timeOverride = null;
+                        this.replayNonce = null;
+                    });
                     break;
                 }
                 default: {
-                    const update = (msg as any)?.params?.update;
-                    if (update?.sessionUpdate) {
-                        this.handleSessionUpdate({ method: 'session/update', params: { update } } as AcpSessionUpdateNotification);
-                    }
+                    this.withEventMeta(meta, () => {
+                        const update = (msg as any)?.params?.update;
+                        if (update?.sessionUpdate) {
+                            this.handleSessionUpdate({ method: 'session/update', params: { update } } as AcpSessionUpdateNotification);
+                        }
+                    });
                     break;
                 }
             }
         });
-
-        this.transport.on('method:session/request_permission', (msg: JsonRpcMessage) => {
-            this.handlePermissionRequest(msg as unknown as AcpRequestPermissionNotification);
-        });
     }
 
     private handleSessionUpdate(notification: AcpSessionUpdateNotification) {
+        const meta = this.activeEventMeta;
         const update = notification.params.update;
         switch (update.sessionUpdate) {
             case 'agent_thought_chunk':
@@ -290,14 +329,14 @@ export class AgentChatClient extends EventEmitter {
                 break;
             case 'end_of_turn':
                 if (this.shouldEmitAssistant(this.currentTurnHidden)) {
-                    this.emit('turn_completed', update.stopReason);
+                    this.emit('turn_completed', update.stopReason, meta ?? undefined);
                 }
                 this.inTurn = false;
                 if (this.activeAssistantId) {
                     const last = this.messages.find(m => m.id === this.activeAssistantId) as AssistantMessage | undefined;
                     if (last && this.lastFinalizedAssistantId !== last.id) {
                         if (this.shouldEmitAssistant(this.currentTurnHidden)) {
-                            this.emit('assistant_text_final', { messageId: last.id, text: last.text });
+                            this.emit('assistant_text_final', { messageId: last.id, text: last.text }, meta ?? undefined);
                         }
                         this.lastFinalizedAssistantId = last.id;
                     }
@@ -310,6 +349,7 @@ export class AgentChatClient extends EventEmitter {
     private updateAssistantMessageNormalized(delta: { text?: string; thought?: string }) {
         const last = this.getOrCreateAssistantMessage();
         const shouldEmitAssistant = this.shouldEmitAssistant(this.currentTurnHidden);
+        const meta = this.activeEventMeta;
 
         if (delta.thought) {
             const rawChunk = delta.thought;
@@ -329,9 +369,10 @@ export class AgentChatClient extends EventEmitter {
                 last.thought += newSegment; // Update global thought for legacy
 
                 if (shouldEmitAssistant) {
-                    this.emit('thought_delta', { messageId: last.id, delta: newSegment, thought: last.thought });
-                    this.emit('assistant_thought_delta', { messageId: last.id, delta: newSegment, thought: last.thought });
-                    this.emit('message_update', last);
+                    if (meta) (last as any).seq = meta.seq;
+                    this.emit('thought_delta', { messageId: last.id, delta: newSegment, thought: last.thought }, meta);
+                    this.emit('assistant_thought_delta', { messageId: last.id, delta: newSegment, thought: last.thought }, meta);
+                    this.emit('message_update', last, meta);
                 }
             }
         }
@@ -357,9 +398,10 @@ export class AgentChatClient extends EventEmitter {
                 last.text += newSegment;     // Update flat text (legacy)
 
                 if (shouldEmitAssistant) {
-                    this.emit('text_delta', { messageId: last.id, delta: newSegment, text: last.text });
-                    this.emit('assistant_text_delta', { messageId: last.id, delta: newSegment, text: last.text });
-                    this.emit('message_update', last);
+                    if (meta) (last as any).seq = meta.seq;
+                    this.emit('text_delta', { messageId: last.id, delta: newSegment, text: last.text }, meta);
+                    this.emit('assistant_text_delta', { messageId: last.id, delta: newSegment, text: last.text }, meta);
+                    this.emit('message_update', last, meta);
                 }
             }
         }
@@ -367,6 +409,7 @@ export class AgentChatClient extends EventEmitter {
 
     private handleToolCall(update: any) {
         const last = this.getOrCreateAssistantMessage();
+        const meta = this.activeEventMeta;
         const toolCallId = update.toolCallId;
         const name = toolCallId?.split('-')[0] || 'unknown';
         const parsed = this.parseToolTitle(update.title);
@@ -388,6 +431,7 @@ export class AgentChatClient extends EventEmitter {
             description: parsed.description,
             workingDir: parsed.workingDir,
             ts: this.now(),
+            seq: meta?.seq,
         };
 
         last.toolCalls.push(toolCall);
@@ -395,14 +439,16 @@ export class AgentChatClient extends EventEmitter {
         last.content.push({ type: 'tool_call', call: toolCall });
 
         if (this.shouldEmitAssistant(this.currentTurnHidden)) {
-            this.emit('tool_update', { messageId: last.id, toolCall });
-            this.emit('tool_call_started', { messageId: last.id, toolCall });
-            this.emit('message_update', last);
+            if (meta) (last as any).seq = meta.seq;
+            this.emit('tool_update', { messageId: last.id, toolCall }, meta);
+            this.emit('tool_call_started', { messageId: last.id, toolCall }, meta);
+            this.emit('message_update', last, meta);
         }
     }
 
     private handleToolUpdate(update: any) {
         const last = this.getOrCreateAssistantMessage();
+        const meta = this.activeEventMeta;
         const toolCallId = update.toolCallId;
         let toolCall = last.toolCalls.find(t => t.id === toolCallId);
         if (!toolCall && this.pendingApproval && this.pendingApproval.toolCall?.toolCallId === toolCallId) {
@@ -410,6 +456,7 @@ export class AgentChatClient extends EventEmitter {
         }
 
         if (toolCall) {
+            if (meta) toolCall.seq = meta.seq;
             if (update.status) {
                 toolCall.status = (update.status === 'in_progress' ? 'running' : update.status) as ToolStatus;
             }
@@ -433,21 +480,23 @@ export class AgentChatClient extends EventEmitter {
                 }
             }
             if (this.shouldEmitAssistant(this.currentTurnHidden)) {
-                this.emit('tool_update', { messageId: last.id, toolCall });
-                this.emit('tool_call_updated', { messageId: last.id, toolCall });
+                this.emit('tool_update', { messageId: last.id, toolCall }, meta);
+                this.emit('tool_call_updated', { messageId: last.id, toolCall }, meta);
             }
             if (toolCall.status === 'completed' || toolCall.status === 'failed' || toolCall.status === 'cancelled') {
                 if (this.shouldEmitAssistant(this.currentTurnHidden)) {
-                    this.emit('tool_call_completed', { messageId: last.id, toolCall });
+                    this.emit('tool_call_completed', { messageId: last.id, toolCall }, meta);
                 }
             }
             if (this.shouldEmitAssistant(this.currentTurnHidden)) {
-                this.emit('message_update', last);
+                if (meta) (last as any).seq = meta.seq;
+                this.emit('message_update', last, meta);
             }
         }
     }
 
     private getOrCreateAssistantMessage(): AssistantMessage {
+        const meta = this.activeEventMeta;
         let last = this.messages[this.messages.length - 1] as AssistantMessage;
         if (!last || last.role !== 'assistant') {
             last = {
@@ -459,10 +508,11 @@ export class AgentChatClient extends EventEmitter {
                 toolCalls: [],
                 ts: this.now(),
                 hidden: this.currentTurnHidden === 'assistant' || this.currentTurnHidden === 'turn',
+                seq: meta?.seq,
             };
             this.messages.push(last);
             if (this.shouldEmitAssistant(this.currentTurnHidden)) {
-                this.emit('message', last);
+                this.emit('message', last, meta ?? undefined);
             }
             if (this.inTurn) this.activeAssistantId = last.id;
         }
@@ -471,10 +521,11 @@ export class AgentChatClient extends EventEmitter {
 
     private handleAuthUrl(notif: AcpAuthUrlNotification) {
         this.authUrl = notif.params.url;
-        this.emit('auth_required', this.authUrl);
+        this.emit('auth_required', this.authUrl, this.activeEventMeta ?? undefined);
     }
 
     private handlePermissionRequest(req: AcpRequestPermissionNotification) {
+        const meta = this.activeEventMeta;
         if (this.shouldAutoRejectApproval(this.currentTurnHidden)) {
             const denyOption = req.params.options.find((opt) => opt.kind.startsWith('deny') || opt.kind.startsWith('reject'));
             if (denyOption) {
@@ -496,8 +547,8 @@ export class AgentChatClient extends EventEmitter {
         this.createToolCallFromPermission(last, this.pendingApproval);
         // Pure SDK: just notify app. App handles policy.
         if (this.shouldEmitAssistant(this.currentTurnHidden)) {
-            this.emit('approval_required', this.pendingApproval);
-            this.emit('permission_required', this.pendingApproval);
+            this.emit('approval_required', this.pendingApproval, meta ?? undefined);
+            this.emit('permission_required', this.pendingApproval, meta ?? undefined);
         }
     }
 
@@ -594,6 +645,7 @@ export class AgentChatClient extends EventEmitter {
     }
 
     private createToolCallFromPermission(last: AssistantMessage, approval: PendingApproval) {
+        const meta = this.activeEventMeta;
         const toolCallId = approval.toolCall?.toolCallId || 'unknown';
         let toolCall = last.toolCalls.find(t => t.id === toolCallId);
         if (toolCall) return toolCall;
@@ -608,12 +660,14 @@ export class AgentChatClient extends EventEmitter {
             description: approval.toolCall?.description,
             workingDir: approval.toolCall?.workingDir,
             ts: this.now(),
+            seq: meta?.seq,
         };
         last.toolCalls.push(toolCall);
         last.content.push({ type: 'tool_call', call: toolCall }); // Fix: Add to ordered content
-        this.emit('tool_update', { messageId: last.id, toolCall });
-        this.emit('tool_call_started', { messageId: last.id, toolCall });
-        this.emit('message_update', last);
+        if (meta) (last as any).seq = meta.seq;
+        this.emit('tool_update', { messageId: last.id, toolCall }, meta);
+        this.emit('tool_call_started', { messageId: last.id, toolCall }, meta);
+        this.emit('message_update', last, meta);
         return toolCall;
     }
 
@@ -664,6 +718,7 @@ export class AgentChatClient extends EventEmitter {
     }
 
     private handleReplayPrompt(prompt: any, hiddenMode?: HiddenMode) {
+        const meta = this.activeEventMeta;
         const first = Array.isArray(prompt) ? prompt[0] : prompt;
         const text = first?.text ?? '';
         if (typeof text !== 'string' || !text.trim()) return;
@@ -673,16 +728,50 @@ export class AgentChatClient extends EventEmitter {
             text,
             hidden: hiddenMode === 'user' || hiddenMode === 'turn',
             ts: this.now(),
+            seq: meta?.seq,
         };
         this.messages.push(userMsg);
-        this.emit('message', userMsg);
-        this.emit('message_update', userMsg);
+        this.emit('message', userMsg, meta ?? undefined);
+        this.emit('message_update', userMsg, meta ?? undefined);
     }
 
     private makeId(prefix: string) {
         this.idCounter += 1;
         const nonce = this.replayNonce ? `-${this.replayNonce}` : '';
         return `${prefix}-${this.now()}${nonce}-${this.idCounter}`;
+    }
+
+    private nextEventMeta(extra: Partial<AgentChatEventMeta> = {}): AgentChatEventMeta {
+        this.eventSeq += 1;
+        return {
+            seq: this.eventSeq,
+            receivedAt: Date.now(),
+            ...extra,
+        };
+    }
+
+    private withEventMeta<T>(meta: AgentChatEventMeta, fn: () => T): T {
+        const prev = this.activeEventMeta;
+        this.activeEventMeta = meta;
+        try {
+            return fn();
+        } finally {
+            this.activeEventMeta = prev;
+        }
+    }
+
+    private attachEventMetaToParams(params: any, meta: AgentChatEventMeta) {
+        if (!params || typeof params !== 'object') return params;
+        const replay =
+            meta.replayId !== undefined || meta.replayTimestamp !== undefined
+                ? { replayId: meta.replayId, timestamp: meta.replayTimestamp }
+                : undefined;
+        if (Array.isArray(params)) {
+            (params as any).__eventMeta = meta;
+            if (replay) (params as any).__replay = replay;
+            return params;
+        }
+        return { ...(params as any), __eventMeta: meta, ...(replay ? { __replay: replay } : {}) };
     }
 
     private buildUrlWithReplay(baseUrl: string, replay?: AgentChatClientOptions['replay']) {

@@ -193,4 +193,49 @@ describe('AgentChatClient Message Ordering', () => {
         // Legacy global thought should be concatenation
         expect(lastMsg.thought).toBe('Thinking about files...Found it');
     });
+
+    test('should update message seq on each server notification', async () => {
+        mockTransport.emitServerEvent('session/update', {
+            update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { text: 'Hello' }
+            }
+        });
+
+        let lastMsg = client.getMessages()[client.getMessages().length - 1];
+        expect(lastMsg.role).toBe('assistant');
+        // seq should be set from the notification
+        expect(lastMsg.seq).toBe(1);
+
+        mockTransport.emitServerEvent('session/update', {
+            update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { text: ' world' }
+            }
+        });
+
+        lastMsg = client.getMessages()[client.getMessages().length - 1];
+        expect(lastMsg.seq).toBe(2);
+    });
+
+    test('should include replayId/timestamp on replayed structured_event', async () => {
+        const seen = [];
+        client.on('bridge/structured_event', (params, meta) => {
+            seen.push({ params, meta });
+        });
+
+        mockTransport.emitServerEvent('bridge/replay', {
+            data: { method: 'bridge/structured_event', params: { foo: 1 } },
+            timestamp: 123456,
+            replayId: 'replay-1'
+        });
+
+        expect(seen).toHaveLength(1);
+        expect(seen[0].meta.seq).toBe(1);
+        expect(seen[0].meta.replayId).toBe('replay-1');
+        expect(seen[0].meta.replayTimestamp).toBe(123456);
+        expect(seen[0].params.__eventMeta.replayId).toBe('replay-1');
+        expect(seen[0].params.__replay.replayId).toBe('replay-1');
+        expect(seen[0].params.__replay.timestamp).toBe(123456);
+    });
 });

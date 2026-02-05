@@ -27,6 +27,13 @@ export type JsonRpcMessage = z.infer<typeof JsonRpcMessageSchema>;
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 export type HiddenMode = 'none' | 'user' | 'assistant' | 'turn';
 
+export interface AgentChatEventMeta {
+    seq: number;
+    receivedAt: number;
+    replayId?: string;
+    replayTimestamp?: number;
+}
+
 export interface PendingApproval {
     requestId: JsonRpcId;
     toolCall: {
@@ -150,6 +157,7 @@ export interface ToolCall {
         newTextLength?: number;
     };
     ts: number;
+    seq?: number;
 }
 
 export type MessageContentPart =
@@ -167,6 +175,7 @@ export interface AssistantMessage {
     stopReason?: string;
     hidden?: boolean;
     ts: number;
+    seq?: number;
 }
 
 export interface UserMessage {
@@ -175,6 +184,7 @@ export interface UserMessage {
     text: string;
     hidden?: boolean;
     ts: number;
+    seq?: number;
 }
 
 export type ChatMessage = UserMessage | AssistantMessage;
