@@ -3,6 +3,7 @@ import * as readline from 'readline';
 import { WebSocketServer, WebSocket } from 'ws';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 
 export interface GeminiBridgeOptions {
     model?: string;
@@ -406,10 +407,12 @@ export class GeminiBridge extends EventEmitter {
                 // Record client prompts for replay and advance turn id
                 if (parsed?.method === 'session/prompt') {
                     const hiddenMode = parsed?.params?.prompt?.[0]?.meta?.hidden;
+                    const promptCopy = parsed?.params?.prompt ? JSON.parse(JSON.stringify(parsed.params.prompt)) : undefined;
                     this.turnId += 1;
                     if (typeof hiddenMode === 'string') {
                         this.turnHiddenModes.set(this.turnId, hiddenMode);
                     }
+                    this.broadcastPromptToPeers(ws, promptCopy, hiddenMode, this.turnId);
                     this.history.push({
                         timestamp: Date.now(),
                         data: { ...parsed, __turnId: this.turnId, __hiddenMode: hiddenMode },
@@ -430,6 +433,48 @@ export class GeminiBridge extends EventEmitter {
 
         ws.on('close', () => {
             this.log('[Gemini Bridge] Client disconnected');
+        });
+    }
+
+    private broadcastPromptToPeers(origin: WebSocket, prompt: any, hiddenMode: unknown, turnId: number) {
+        if (!this.wss) return;
+        const first = Array.isArray(prompt) ? prompt[0] : undefined;
+        const text = first?.text;
+        if (typeof text !== 'string' || !text.trim()) return;
+
+        const timestamp = Date.now();
+        const replayId =
+            typeof (crypto as any).randomUUID === 'function'
+                ? (crypto as any).randomUUID()
+                : `${timestamp}-${Math.random().toString(16).slice(2)}`;
+
+        const hidden = typeof hiddenMode === 'string' ? hiddenMode : undefined;
+        const data: any = {
+            jsonrpc: '2.0',
+            method: 'session/prompt',
+            params: {
+                prompt,
+                ...(hidden ? { meta: { hidden } } : {}),
+            },
+            __turnId: turnId,
+            ...(hidden ? { __hiddenMode: hidden } : {}),
+        };
+
+        const envelope = {
+            jsonrpc: '2.0',
+            method: 'bridge/replay',
+            params: {
+                timestamp,
+                replayId,
+                data,
+            },
+        };
+        const str = JSON.stringify(envelope);
+        this.wss.clients.forEach((client: WebSocket) => {
+            if (client === origin) return;
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(str);
+            }
         });
     }
 
