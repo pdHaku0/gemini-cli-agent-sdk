@@ -107,3 +107,9 @@ bridge.on('client:message', (msg) => {
   }
 });
 ```
+
+### UI ordering tip (client-side)
+
+If you also render structured events in your UI, prefer ordering by the SDK-provided
+`meta.seq` / `message.seq` instead of `ts`, because `ts` may be fixed when the message
+object is created while streaming updates arrive later.

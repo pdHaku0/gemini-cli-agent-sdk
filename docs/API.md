@@ -98,3 +98,14 @@ new GeminiBridge(options?: GeminiBridgeOptions)
 ## Types
 
 See `src/common/types.ts` for canonical type definitions.
+
+### Ordering fields
+
+For UIs that need to reconstruct **receive order** across mixed streams, the SDK provides:
+
+- `ChatMessage.seq?: number` (updated on each `message_update`)
+- `ToolCall.seq?: number`
+- `AgentChatEventMeta` (optional second argument on many events)
+
+`seq` is monotonically increasing in the order the SDK receives notifications, and is
+safe to use for sorting/interleaving (unlike `ts`, which is typically fixed at object creation).

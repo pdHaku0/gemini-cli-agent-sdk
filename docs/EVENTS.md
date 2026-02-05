@@ -4,6 +4,18 @@ This document defines the event model and how to render messages correctly witho
 
 ## Core Events (AgentChatClient)
 
+## Event metadata (ordering)
+
+Many events now include an optional second argument `meta` with ordering info:
+
+- `meta.seq`: a monotonically increasing sequence number assigned in **arrival order**
+- `meta.receivedAt`: local timestamp when the SDK received the notification
+- `meta.replayId` / `meta.replayTimestamp`: present for events that came from replay
+
+This is intended to let UIs interleave `messages` and out-of-band events (like
+`bridge/structured_event`) in the true receive order without relying on `ts`
+(which is often fixed at message creation time).
+
 ### Connection
 
 - `connection_state_changed`
@@ -18,8 +30,10 @@ This document defines the event model and how to render messages correctly witho
 
 - `message`
   - emitted when a **new message object** is created (user or assistant)
+  - handler: `(msg: ChatMessage, meta?: AgentChatEventMeta) => void`
 - `message_update`
   - emitted when streaming text/thought/tool updates modify a message
+  - handler: `(msg: ChatMessage, meta?: AgentChatEventMeta) => void`
 
 ### Streaming deltas
 
@@ -28,6 +42,7 @@ This document defines the event model and how to render messages correctly witho
 - `thought_delta`
 - `assistant_thought_delta`
   - payload: `{ messageId, delta, text|thought }`
+  - handler: `(payload, meta?: AgentChatEventMeta) => void`
 
 ### Tools
 
@@ -36,13 +51,16 @@ This document defines the event model and how to render messages correctly witho
 - `tool_call_updated`
 - `tool_call_completed`
   - payload: `{ messageId, toolCall }`
+  - handler: `(payload, meta?: AgentChatEventMeta) => void`
 
 ### Turn lifecycle
 
 - `turn_started`
   - payload: `{ userMessageId }`
+  - handler: `(payload, meta?: AgentChatEventMeta) => void`
 - `turn_completed`
   - payload: `stopReason` (string)
+  - handler: `(stopReason: string, meta?: AgentChatEventMeta) => void`
 
 ### Auth / Permission
 
@@ -61,7 +79,9 @@ This document defines the event model and how to render messages correctly witho
 ### Structured events (optional)
 
 - `bridge/structured_event`
-  - payload: `{ type, payload, raw, error? }`
+  - payload: `{ type, payload, raw, error?, __eventMeta?, __replay? }`
+    - `__eventMeta`: same as the `meta` argument
+    - `__replay`: `{ replayId, timestamp }` when replayed
   - emitted when SYS tags are captured by the bridge (see `docs/USAGE.md`)
 
 ## Rendering Rules (Important)
@@ -83,6 +103,11 @@ Tool approvals are tied to a specific tool call via `toolCallId`. Put the approv
 ### 3) User messages are local
 
 The server does **not** echo user messages. You must render them from SDK state (`message` event or store state).
+
+### 4) Interleave by `seq` when mixing streams
+
+If you render extra logs (e.g. `bridge/structured_event`) together with chat messages,
+sort by `seq` (or append in `seq` order) instead of sorting by message `ts`.
 
 ## Suggested UI Pattern
 

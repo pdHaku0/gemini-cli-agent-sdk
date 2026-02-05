@@ -237,6 +237,14 @@ It includes auth UI, tool approvals, replay, and session persistence.
 When you use SYS tags, the bridge emits `bridge/structured_event`. You can use it to
 run backend tools **without leaking JSON to the UI**.
 
+On the **client**, `AgentChatClient` also re-emits this as an SDK event:
+
+```ts
+client.on('bridge/structured_event', (params, meta) => {
+  // params.__eventMeta / meta include ordering info (seq) and replay info.
+});
+```
+
 Example (pseudo):
 
 ```ts
