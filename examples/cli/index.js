@@ -57,10 +57,16 @@ client.on('turn_started', () => {
     console.log(`\n[System] Turn started...`);
 });
 
-client.on('bridge/structured_event', (evt) => {
+client.on('bridge/structured_event', (evt, meta) => {
     if (!evt) return;
+    // New SDK: many events provide an optional `meta` 2nd arg with receive-order info.
+    // Keep backward-compatibility by reading from either `meta` or `evt.__eventMeta`.
+    const m = meta || evt.__eventMeta;
+    const seq = m?.seq !== undefined ? `#${m.seq} ` : '';
+    const replay = (m?.replayId || evt.__replay?.replayId) ? ' (replay)' : '';
+
     process.stdout.write('\n');
-    console.log(`\x1b[35m[SYS_EVENT] ${evt.type || 'unknown'}\x1b[0m`);
+    console.log(`\x1b[35m[SYS_EVENT] ${seq}${evt.type || 'unknown'}${replay}\x1b[0m`);
     if (evt.error) {
         console.log(`\x1b[31m  Error: ${evt.error}\x1b[0m`);
     }

@@ -43,3 +43,9 @@ NEXT_PUBLIC_GEMINI_CWD=/home/yohaku/gemini-cli-agent-sdk npm run dev
 
 The example stores `sessionId` in localStorage and reuses it after page reload.
 If the bridge restarts, a new session is created automatically.
+
+## Structured events (optional)
+
+If your bridge is configured to emit `bridge/structured_event` (SYS tag capture),
+this example also listens to that event on the client and shows a small debug panel.
+Use `meta.seq` / `params.__eventMeta.seq` to interleave these events with message updates.

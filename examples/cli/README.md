@@ -27,6 +27,9 @@ GEMINI_WS_URL=ws://localhost:4444 node examples/cli/index.js
 If your bridge is configured with SYS tag parsing (see `docs/USAGE.md`), this CLI will
 print structured events as `[SYS_EVENT] ...`.
 
+It also prints the optional receive-order sequence number (`meta.seq`) when available,
+so you can interleave these events with chat message updates in UI/timeline renderers.
+
 Minimal bridge setup (server-side):
 
 ```ts

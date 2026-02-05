@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { AgentChatClient, AgentChatStore } from '@pdhaku0/gemini-cli-agent-sdk/client';
-import type { AgentChatState, ChatMessage } from '@pdhaku0/gemini-cli-agent-sdk/client';
+import type { AgentChatEventMeta, AgentChatState, ChatMessage } from '@pdhaku0/gemini-cli-agent-sdk/client';
 import ToolCallView from './ToolCallView';
 
 const INITIAL_REPLAY_LIMIT = 15;
@@ -31,6 +31,18 @@ export default function AgentChat() {
   const [authCode, setAuthCode] = useState('');
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [lastReplayTs, setLastReplayTs] = useState<number | null>(null);
+  const [structuredEvents, setStructuredEvents] = useState<
+    Array<{
+      seq?: number;
+      receivedAt?: number;
+      replayId?: string;
+      replayTimestamp?: number;
+      type?: string;
+      payload?: unknown;
+      raw?: unknown;
+      error?: unknown;
+    }>
+  >([]);
 
   const resolvedUrl = useMemo(() => {
     if (process.env.NEXT_PUBLIC_GEMINI_WS_URL) return process.env.NEXT_PUBLIC_GEMINI_WS_URL;
@@ -61,10 +73,29 @@ export default function AgentChat() {
       if (typeof window === 'undefined') return;
       window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
     };
+    const handleStructuredEvent = (params: any, meta?: AgentChatEventMeta) => {
+      const m: AgentChatEventMeta | undefined = meta || params?.__eventMeta;
+      const replay = params?.__replay;
+      setStructuredEvents((prev) => [
+        ...prev,
+        {
+          seq: m?.seq,
+          receivedAt: m?.receivedAt,
+          replayId: m?.replayId ?? replay?.replayId,
+          replayTimestamp: m?.replayTimestamp ?? replay?.timestamp,
+          type: params?.type,
+          payload: params?.payload,
+          raw: params?.raw,
+          error: params?.error,
+        },
+      ]);
+    };
     client.on('session_ready', handleSessionReady);
+    client.on('bridge/structured_event', handleStructuredEvent);
     client.connect().catch((err) => console.error(err));
     return () => {
       client.off('session_ready', handleSessionReady);
+      client.off('bridge/structured_event', handleStructuredEvent);
       unsubscribe();
     };
   }, [client, store]);
@@ -144,6 +175,36 @@ export default function AgentChat() {
             {isLoadingOlder ? 'Loading...' : 'Load older'}
           </button>
         </div>
+        {structuredEvents.length > 0 && (
+          <details style={{ marginBottom: 12 }}>
+            <summary style={{ cursor: 'pointer', fontSize: 12, color: '#6e6258' }}>
+              structured events: {structuredEvents.length} (use `seq` to interleave with messages)
+            </summary>
+            <div style={{ marginTop: 8, padding: 12, background: '#fff4cc' }}>
+              {structuredEvents
+                .slice()
+                .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
+                .slice(-50)
+                .map((evt, i) => (
+                  <div key={`${evt.seq ?? 'na'}-${i}`} style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>
+                      #{evt.seq ?? '?'} {evt.type || 'unknown'}{evt.replayId ? ' (replay)' : ''}
+                    </div>
+                    {evt.error && <div style={{ color: '#a40000' }}>error: {String(evt.error)}</div>}
+                    {evt.payload !== undefined ? (
+                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12, color: '#6e6258' }}>
+                        {typeof evt.payload === 'string' ? evt.payload : JSON.stringify(evt.payload, null, 2)}
+                      </pre>
+                    ) : evt.raw ? (
+                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12, color: '#6e6258' }}>
+                        {String(evt.raw)}
+                      </pre>
+                    ) : null}
+                  </div>
+                ))}
+            </div>
+          </details>
+        )}
         {state.messages.map((m) => (
           <div key={m.id} style={{ marginBottom: 16 }}>
             <div style={{ fontWeight: 600 }}>{m.role}</div>
