@@ -1,6 +1,6 @@
 {
   "name": "@pdhaku0/gemini-cli-agent-sdk",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "description": "A high-level SDK for building AI Agent chat interfaces using Gemini ACP",
   "main": "dist/index.js",
